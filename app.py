@@ -10,7 +10,7 @@ st.write("""
 Bu radarda amaç standart teknik analiz değil; **balinaların ve kurumsal fonların önceden aldığı pozisyonları (Unusual Volume/OI, Yüksek IV ve Hacim Patlamaları)** tespit ederek hareket başlamadan önce önden haber almaktır.
 """)
 
-# Opsiyon Hareketliliği En Yüksek 40 Şirket
+# Opsiyon Hareketliliği En Yüksek 30 Dev Şirket
 TICKERS = [
     "NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "PLTR", "META", "GOOGL", "NFLX",
     "INTC", "AVGO", "COST", "COIN", "MARA", "BABA", "ARM", "MU", "PYPL", "BAC",
@@ -37,7 +37,7 @@ def scan_whale_signals(tickers):
         try:
             tk = yf.Ticker(ticker_symbol)
             hist = tk.history(period="1mo")
-            if hist.empty or len(hist) < 5:
+            if hist.empty or len(hist) < 3:
                 continue
 
             current_price = hist['Close'].iloc[-1]
@@ -46,52 +46,72 @@ def scan_whale_signals(tickers):
             
             rsi = calculate_rsi(hist).iloc[-1] if len(hist) >= 14 else 50.0
 
-            # --- OPSİYON VE BALİNA ANALİZİ ---
-            expirations = tk.expirations
-            if not expirations:
-                continue
+            # --- OPSİYON VE BALİNA ANALİZİ (Güvenli Çekim) ---
+            call_vol, put_vol = 0, 0
+            avg_iv = 0
+            max_vol_oi = 1.0
 
-            nearest_exp = expirations[0]
-            opt = tk.option_chain(nearest_exp)
+            try:
+                expirations = tk.expirations
+                if expirations:
+                    nearest_exp = expirations[0]
+                    opt = tk.option_chain(nearest_exp)
 
-            calls = opt.calls.dropna(subset=['volume', 'openInterest']) if opt.calls is not None else pd.DataFrame()
-            puts = opt.puts.dropna(subset=['volume', 'openInterest']) if opt.puts is not None else pd.DataFrame()
+                    calls = opt.calls if opt.calls is not None else pd.DataFrame()
+                    puts = opt.puts if opt.puts is not None else pd.DataFrame()
 
-            call_vol = calls['volume'].sum() if not calls.empty else 0
-            put_vol = puts['volume'].sum() if not puts.empty else 0
+                    if not calls.empty:
+                        call_vol = calls['volume'].fillna(0).sum()
+                        iv_c = calls['impliedVolatility'].dropna().mean()
+                    else:
+                        iv_c = 0
+
+                    if not puts.empty:
+                        put_vol = puts['volume'].fillna(0).sum()
+                        iv_p = puts['impliedVolatility'].dropna().mean()
+                    else:
+                        iv_p = 0
+
+                    # Ortalama Volatilite Beklentisi (IV)
+                    iv_c = 0 if np.isnan(iv_c) else iv_c
+                    iv_p = 0 if np.isnan(iv_p) else iv_p
+                    avg_iv = round(((iv_c + iv_p) / 2) * 100, 1)
+
+                    # Hacim / OI Hesabı (Hata vermeyen yöntem)
+                    c_vol_sum = calls['volume'].fillna(0).sum() if 'volume' in calls else 0
+                    c_oi_sum = calls['openInterest'].fillna(0).sum() if 'openInterest' in calls else 0
+                    p_vol_sum = puts['volume'].fillna(0).sum() if 'volume' in puts else 0
+                    p_oi_sum = puts['openInterest'].fillna(0).sum() if 'openInterest' in puts else 0
+
+                    tot_oi = c_oi_sum + p_oi_sum
+                    tot_v = c_vol_sum + p_vol_sum
+
+                    if tot_oi > 0 and tot_v > 0:
+                        max_vol_oi = round(tot_v / tot_oi, 2)
+            except Exception:
+                pass
+
             total_vol = call_vol + put_vol
 
-            if total_vol == 0:
-                continue
-
-            call_ratio = (call_vol / total_vol) * 100
-            put_ratio = (put_vol / total_vol) * 100
-
-            # Implied Volatility (Ortalama Oynaklık Beklentisi)
-            avg_iv_calls = calls['impliedVolatility'].mean() if not calls.empty else 0
-            avg_iv_puts = puts['impliedVolatility'].mean() if not puts.empty else 0
-            avg_iv = round(((avg_iv_calls + avg_iv_puts) / 2) * 100, 1)
-
-            # Vol / OI Oranı (Sıra Dışı Akış Hesabı)
-            calls_vol_oi = (calls['volume'] / calls['openInterest'].replace(0, np.nan)).mean() if not calls.empty else 0
-            puts_vol_oi = (puts['volume'] / puts['openInterest'].replace(0, np.nan)).mean() if not puts.empty else 0
-            max_vol_oi = round(max(calls_vol_oi if not np.isnan(calls_vol_oi) else 0, 
-                                   puts_vol_oi if not np.isnan(puts_vol_oi) else 0), 2)
+            if total_vol > 0:
+                call_ratio = (call_vol / total_vol) * 100
+                put_ratio = (put_vol / total_vol) * 100
+            else:
+                call_ratio, put_ratio = 50.0, 50.0
 
             # --- SİNYAL ÜRETME ---
-            whale_status = "⚪ normal Akış"
+            whale_status = "⚪ Normal Akış"
             
-            # Sınıflandırma
-            if max_vol_oi > 1.2 or avg_iv > 80:
-                if call_ratio >= 65:
+            if max_vol_oi > 1.2 or avg_iv > 75:
+                if call_ratio >= 60:
                     whale_status = "🚨 OLAĞANDIŞI BULLISH BALİNA"
-                elif put_ratio >= 65:
+                elif put_ratio >= 60:
                     whale_status = "🚨 OLAĞANDIŞI BEARISH BALİNA"
                 else:
                     whale_status = "⚡ YÜKSEK VOLATİLİTE SİNYALİ"
-            elif call_ratio >= 68:
+            elif call_ratio >= 65:
                 whale_status = "🟢 CALL AĞIRLIKLI"
-            elif put_ratio >= 68:
+            elif put_ratio >= 65:
                 whale_status = "🔴 PUT AĞIRLIKLI"
 
             signals.append({
@@ -99,9 +119,9 @@ def scan_whale_signals(tickers):
                 "Balina Sinyali": whale_status,
                 "Fiyat ($)": round(current_price, 2),
                 "Günlük %": round(price_change, 2),
-                "Call/Put Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put",
-                "Vol / OI (Sıra Dışı Katı)": f"{max_vol_oi}x",
-                "Beklenen Volatolite (IV)": f"%{avg_iv}",
+                "Call/Put Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put" if total_vol > 0 else "Piyasa Kapalı",
+                "Vol / OI (Sıra Dışı Katı)": f"{max_vol_oi}x" if total_vol > 0 else "1.0x",
+                "Beklenen Volatilitik (IV)": f"%{avg_iv}",
                 "RSI": round(rsi, 1)
             })
 
@@ -111,19 +131,13 @@ def scan_whale_signals(tickers):
     status_text.empty()
     progress_bar.empty()
     
-    df_res = pd.DataFrame(signals)
-    if not df_res.empty:
-        # Önceliği Olağanüstü Balina Akışlarına Ver
-        df_res['Öncelik'] = df_res['Balina Sinyali'].apply(lambda x: 0 if '🚨' in x else (1 if '⚡' in x else 2))
-        df_res = df_res.sort_values(by=['Öncelik', 'Vol / OI (Sıra Dışı Katı)'], ascending=[True, False]).drop(columns=['Öncelik'])
-    
-    return df_res
+    return pd.DataFrame(signals)
 
 if st.button("🚨 Öncü Balina ve Opsiyon Akışını Tara", type="primary"):
     with st.spinner("Balina kontratları ve sıra dışı hacimler taranıyor..."):
         df = scan_whale_signals(TICKERS)
         if not df.empty:
-            st.success("Öncü analiz tamamlandı! Sıra dışı balina hareketleri en üstte listelenmiştir.")
+            st.success(f"Analiz tamamlandı! Toplam {len(df)} hisse tarandı.")
             st.dataframe(df, use_container_width=True)
         else:
-            st.warning("Veri çekilemedi veya kapalı piyasa nedeniyle veri bulunamadı.")
+            st.error("Veri çekilemedi. Bağlantınızı kontrol edin.")
