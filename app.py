@@ -2,18 +2,33 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-st.set_page_config(page_title="Hisse & Opsiyon Çift Yönlü Analiz Paneli", layout="wide")
-st.title("🎯 Hisse (Al/Sat) & Opsiyon (Call/Put) Sinyal Radarı")
+st.set_page_config(page_title="Nasdaq 100 Hisse & Opsiyon Radarı", layout="wide")
+st.title("🎯 Nasdaq 100 Hisse (Al/Sat) & Opsiyon (Call/Put) Radarı")
 
 st.write("""
-Bu panel; hisselerin **Spot Fiyat Yönünü (Yükseliş/Düşüş)** ve **Opsiyon Eğilimini (Call/Put)** 
-fiyat akışı ve teknik indikatörleri (RSI) harmanlayarak hesaplar.
+Bu panel; **Nasdaq 100** hisselerinin tümünü tarayarak **Spot Fiyat Yönünü (Yükseliş/Düşüş)** ve 
+**Opsiyon Akış Eğilimini (Call/Put)** fiyat hareketleri, RSI indikatörü ve hacim dağılımına göre analiz eder.
 """)
 
-OPTION_TICKERS = [
-    "NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "PLTR", "META", 
-    "GOOGL", "NFLX", "SPY", "QQQ", "COIN", "MARA", "BABA", "INTC"
-]
+# --- NASDAQ 100 HİSSE LİSTESİNİ OTOMATİK ÇEKER ---
+@st.cache_data
+def get_nasdaq100_tickers():
+    try:
+        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+        tables = pd.read_html(url)
+        for table in tables:
+            if 'Ticker' in table.columns:
+                return table['Ticker'].tolist()
+            elif 'Symbol' in table.columns:
+                return table['Symbol'].tolist()
+    except Exception:
+        # Bağlantı hatası olursa yedek geniş liste
+        return [
+            "NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "PLTR", "META", "GOOGL", "NFLX",
+            "INTC", "AVGO", "COST", "PEP", "TMUS", "CSCO", "TMUS", "TXN", "QCOM", "AMAT"
+        ]
+
+TICKERS = get_nasdaq100_tickers()
 
 def calculate_rsi(data, window=14):
     delta = data['Close'].diff()
@@ -29,11 +44,13 @@ def analyze_stock_and_options(tickers):
     total = len(tickers)
 
     for idx, ticker_symbol in enumerate(tickers):
-        status_text.text(f"Analiz Ediliyor ({idx+1}/{total}): {ticker_symbol}")
+        # Ticker sembollerindeki noktaları yfinance uyumlu tireye çevir (.) -> (-)
+        clean_symbol = str(ticker_symbol).replace('.', '-')
+        status_text.text(f"Nasdaq 100 Taranıyor ({idx+1}/{total}): {clean_symbol}")
         progress_bar.progress((idx + 1) / total)
 
         try:
-            tk = yf.Ticker(ticker_symbol)
+            tk = yf.Ticker(clean_symbol)
             hist = tk.history(period="1mo")
             if hist.empty or len(hist) < 5:
                 continue
@@ -42,14 +59,14 @@ def analyze_stock_and_options(tickers):
             prev_price = hist['Close'].iloc[-2]
             price_change = ((current_price - prev_price) / prev_price) * 100
             
-            # RSI Güvenli Hesaplama
+            # RSI Hesaplama
             if len(hist) >= 14:
                 hist['RSI'] = calculate_rsi(hist)
                 rsi = hist['RSI'].iloc[-1]
             else:
                 rsi = 50.0
 
-            # 1. Opsiyon Akışı
+            # 1. Opsiyon Akış Verisi
             call_vol, put_vol = 0, 0
             try:
                 expirations = tk.expirations
@@ -89,8 +106,8 @@ def analyze_stock_and_options(tickers):
 
             # 3. OPSİYON YÖNÜ HESAPLAMA
             option_score = 50
-            if call_ratio > 58: option_score += 30
-            elif put_ratio > 58: option_score -= 30
+            if call_ratio > 55: option_score += 30
+            elif put_ratio > 55: option_score -= 30
 
             if stock_score >= 65: option_score += 10
             elif stock_score <= 35: option_score -= 10
@@ -103,27 +120,27 @@ def analyze_stock_and_options(tickers):
                 option_signal = "⚖️ KARARSIZ"
 
             signals.append({
-                "Hisse": ticker_symbol,
+                "Hisse": clean_symbol,
                 "Hisse Yönü": stock_signal,
                 "Opsiyon Yönü": option_signal,
                 "Fiyat ($)": round(current_price, 2),
                 "Günlük %": round(price_change, 2),
                 "RSI": round(rsi, 1),
-                "Opsiyon Hacim Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put"
+                "Opsiyon Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put" if total_opt_vol > 0 else "Veri Yok / Kapalı"
             })
 
-        except Exception as e:
+        except Exception:
             continue
 
     status_text.empty()
     progress_bar.empty()
     return pd.DataFrame(signals)
 
-if st.button("🚀 Hisse & Opsiyon Analizini Başlat", type="primary"):
-    with st.spinner("Piyasa verileri analiz ediliyor..."):
-        df = analyze_stock_and_options(OPTION_TICKERS)
+if st.button("🚀 Tüm Nasdaq 100 Hisselerini Tara", type="primary"):
+    with st.spinner("Nasdaq 100 hisseleri ve opsiyon zincirleri taranıyor..."):
+        df = analyze_stock_and_options(TICKERS)
         if not df.empty:
-            st.success(f"Analiz tamamlandı! Toplam {len(df)} hisse tarandı.")
+            st.success(f"Tarama tamamlandı! Toplam {len(df)} Nasdaq 100 hissesi analiz edildi.")
             st.dataframe(df, use_container_width=True)
         else:
-            st.error("Veri çekilemedi. Lütfen bağlantınızı kontrol edip tekrar deneyin.")
+            st.error("Veri çekilemedi. Lütfen tekrar deneyin.")
