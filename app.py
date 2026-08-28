@@ -1,4 +1,4 @@
-.import streamlit as st
+import streamlit as st
 import pandas as pd
 import yfinance as yf
 
@@ -34,7 +34,17 @@ def get_real_market_data(ticker_symbol):
             max_strike_call = round(current_price * 1.05, 2)
             max_strike_put = round(current_price * 0.95, 2)
 
-            option_signal = "🟢 CALL AĞIRLIKLI" if call_ratio >= 50 else "🔴 PUT AĞIRLIKLI"
+            # Net Karar Sinyali
+            if call_ratio >= 50 and change_percent > -2:
+                net_advice = "🟢 KESİN CALL AL"
+                option_signal = "🟢 CALL AĞIRLIKLI"
+            elif put_ratio > 50 or change_percent <= -2:
+                net_advice = "🔴 KESİN PUT AL"
+                option_signal = "🔴 PUT AĞIRLIKLI"
+            else:
+                net_advice = "🟡 TEMKİNLİ BEKLE"
+                option_signal = "⚪ NÖTR"
+
             stock_signal = "🟢 YÜKSELİŞ (AL)" if change_percent >= 0 else "🔴 DÜŞÜŞ (SAT)"
             
             whale_action = f"🚀 YUKARI OLTASI: Balinalar %{int(call_ratio)} oranında CALL pozisyonunda." if call_ratio >= 50 else f"🔻 DÜŞÜŞ OLTASI: Balinalar %{int(put_ratio)} oranında PUT pozisyonunda."
@@ -44,14 +54,13 @@ def get_real_market_data(ticker_symbol):
                 "Hisse": clean_symbol,
                 "Fiyat ($)": round(current_price, 2),
                 "Günlük %": change_percent,
+                "Net Tavsiye": net_advice,
                 "Hisse Yönü (Spot)": stock_signal,
                 "Opsiyon Yönü": option_signal,
                 "Call / Put Dağılımı": f"%{call_ratio} Call / %{put_ratio} Put",
-                "Call Hacim/OI": call_vol,
-                "Put Hacim/OI": put_vol,
                 "Sıra Dışı Kat (Vol/OI)": f"{vol_oi_ratio}x",
-                "Call Hedef Fiyatı": f"${max_strike_call}",
-                "Put Koruma Fiyatı": f"${max_strike_put}",
+                "Call Hedef": f"${max_strike_call}",
+                "Put Koruma": f"${max_strike_put}",
                 "Balina Eylemi": whale_action,
                 "Hedef Detayı": target_comment,
                 "Veri Durumu": "yfinance Canlı Akış"
@@ -74,8 +83,8 @@ with tab1:
                 st.success(f"{res['Hisse']} - Balina Analiz Raporu")
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Son Fiyat ($)", f"${res['Fiyat ($)']}", f"%{res['Günlük %']}")
-                col2.metric("Hisse Yönü", res['Hisse Yönü (Spot)'])
-                col3.metric("Opsiyon Yönü", res['Opsiyon Yönü'])
+                col2.metric("Net Tavsiye", res['Net Tavsiye'])
+                col3.metric("Hisse Yönü", res['Hisse Yönü (Spot)'])
                 col4.metric("Sıra Dışı Kat", res['Sıra Dışı Kat (Vol/OI)'])
 
                 st.divider()
@@ -84,8 +93,8 @@ with tab1:
                 
                 st.divider()
                 col_a, col_b = st.columns(2)
-                col_a.write(f"📌 **Call Hedefi (Strike):** {res['Call Hedef Fiyatı']}")
-                col_b.write(f"📌 **Put Seviyesi (Strike):** {res['Put Koruma Fiyatı']}")
+                col_a.write(f"📌 **Call Hedefi (Strike):** {res['Call Hedef']}")
+                col_b.write(f"📌 **Put Seviyesi (Strike):** {res['Put Koruma']}")
                 
                 st.divider()
                 st.json(res)
