@@ -3,15 +3,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Hisse & Opsiyon Analiz ve Arama Paneli", layout="wide")
-st.title("🎯 Hisse & Opsiyon Arama ve Sinyal Radarı")
+st.set_page_config(page_title="Öncü Balina & Opsiyon Radarı", layout="wide")
+st.title("🐋 Öncü Balina Akışı & Net Yön Radarı")
 
 st.write("""
-Bu panel ile ister **istediğin hisseyi aratarak** tüm Call/Put opsiyon akışını ve Hisse/Opsiyon sinyallerini inceleyebilir, 
-ister **Toplu Tarama** ile piyasadaki öne çıkan fırsatları yakalayabilirsin.
+Bu radarda amaç standart teknik analiz değil; **balinaların ve kurumsal fonların opsiyon piyasasında nereye olta attığını (Call/Put), hedef fiyatlarını ve potansiyel patlama yönünü** hareket başlamadan önce önden haber almaktır.
 """)
 
-# Varsayılan Popüler Listemiz
+# Popüler Dev Şirketler Listesi
 DEFAULT_TICKERS = [
     "NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "PLTR", "META", "GOOGL", "NFLX",
     "INTC", "AVGO", "COST", "COIN", "MARA", "BABA", "ARM", "MU", "PYPL", "BAC",
@@ -26,7 +25,6 @@ def calculate_rsi(data, window=14):
     return 100 - (100 / (1 + rs))
 
 def get_complete_analysis(ticker_symbol):
-    """Tek bir hissenin detaylı analizini yapar"""
     try:
         clean_symbol = ticker_symbol.strip().upper()
         tk = yf.Ticker(clean_symbol)
@@ -38,13 +36,13 @@ def get_complete_analysis(ticker_symbol):
         current_price = hist['Close'].iloc[-1]
         prev_price = hist['Close'].iloc[-2]
         price_change = ((current_price - prev_price) / prev_price) * 100
-        
         rsi = calculate_rsi(hist).iloc[-1] if len(hist) >= 14 else 50.0
 
-        # --- OPSİYON VE BALİNA ANALİZİ ---
         call_vol, put_vol = 0, 0
         call_oi, put_oi = 0, 0
         avg_iv = 0
+        max_strike_call = 0
+        max_strike_put = 0
 
         try:
             expirations = tk.expirations
@@ -59,6 +57,11 @@ def get_complete_analysis(ticker_symbol):
                     call_vol = calls['volume'].fillna(0).sum()
                     call_oi = calls['openInterest'].fillna(0).sum()
                     iv_c = calls['impliedVolatility'].dropna().mean()
+                    
+                    # En çok pozisyon yığılan Call hedef fiyatı (Strike)
+                    sorted_calls = calls.sort_values(by=['openInterest', 'volume'], ascending=False)
+                    if not sorted_calls.empty:
+                        max_strike_call = sorted_calls.iloc[0]['strike']
                 else:
                     iv_c = 0
 
@@ -66,6 +69,11 @@ def get_complete_analysis(ticker_symbol):
                     put_vol = puts['volume'].fillna(0).sum()
                     put_oi = puts['openInterest'].fillna(0).sum()
                     iv_p = puts['impliedVolatility'].dropna().mean()
+                    
+                    # En çok pozisyon yığılan Put seviyesi (Strike)
+                    sorted_puts = puts.sort_values(by=['openInterest', 'volume'], ascending=False)
+                    if not sorted_puts.empty:
+                        max_strike_put = sorted_puts.iloc[0]['strike']
                 else:
                     iv_p = 0
 
@@ -79,110 +87,120 @@ def get_complete_analysis(ticker_symbol):
         total_vol = call_vol + put_vol
         total_oi = call_oi + put_oi
 
+        # Hafta içi canlı hacim, hafta sonu kapanış OI takibi
         if total_vol > 0:
             call_ratio = (call_vol / total_vol) * 100
             put_ratio = (put_vol / total_vol) * 100
             vol_oi_ratio = round(total_vol / total_oi, 2) if total_oi > 0 else 1.0
-            data_mode = "Canlı Akış"
+            data_mode = "Canlı İşlem Akışı"
         elif total_oi > 0:
             call_ratio = (call_oi / total_oi) * 100
             put_ratio = (put_oi / total_oi) * 100
             vol_oi_ratio = 1.0
-            data_mode = "Son Kapanış OI"
+            data_mode = "Son Kapanış OI (Hafta Sonu)"
         else:
             call_ratio, put_ratio = 50.0, 50.0
             vol_oi_ratio = 1.0
             data_mode = "Veri Yok"
 
-        # --- 1. HİSSE YÖN SİNYALİ (Spot Fiyat) ---
-        stock_score = 50
-        if rsi < 42: stock_score += 25
-        elif rsi > 62: stock_score -= 25
-        if price_change > 0.8: stock_score += 15
-        elif price_change < -0.8: stock_score -= 15
-
-        if stock_score >= 65:
-            stock_signal = "🟢 YÜKSELİŞ (AL)"
-        elif stock_score <= 35:
-            stock_signal = "🔴 DÜŞÜŞ (SAT)"
-        else:
-            stock_signal = "⚖️ NÖTR / YATAY"
-
-        # --- 2. OPSİYON YÖN SİNYALİ (Call / Put) ---
-        if vol_oi_ratio > 1.2 or avg_iv > 75:
-            if call_ratio >= 60:
-                option_signal = "🚨 OLAĞANDIŞI CALL BALİNA"
-            elif put_ratio >= 60:
-                option_signal = "🚨 OLAĞANDIŞI PUT BALİNA"
+        # Net Türkçe Yorum Üretici
+        if call_ratio >= 60:
+            whale_action = f"🚀 YUKARI OLTASI: Balinalar %{int(call_ratio)} oranında CALL pozisyonuna yığılmış."
+            if max_strike_call > current_price:
+                target_comment = f"Özellikle **{max_strike_call}$** hedef fiyatlı kontratlara devasa alım yapılmış. Fiyatı buraya taşımak istiyorlar."
             else:
-                option_signal = "⚡ YÜKSEK VOLATİLİTE"
-        elif call_ratio >= 60:
-            option_signal = "🟢 CALL AĞIRLIKLI"
+                target_comment = "Kaldıraçlı yükseliş bahisleri çok baskın."
         elif put_ratio >= 60:
-            option_signal = "🔴 PUT AĞIRLIKLI"
+            whale_action = f"🔻 DÜŞÜŞ / KORUMA OLTASI: Balinalar %{int(put_ratio)} oranında PUT pozisyonuna yığılmış."
+            if max_strike_put < current_price:
+                target_comment = f"Özellikle **{max_strike_put}$** seviyesine doğru bir düşüş beklentisi veya sert korunma pozisyonu var."
+            else:
+                target_comment = "Aşağı yönlü baskı veya hedge alımları ağırlıkta."
         else:
-            option_signal = "⚖️ KARARSIZ / DENGELİ"
+            whale_action = f"⚖️ NÖTR / KARARSIZ: Hacim %{int(call_ratio)} Call - %{int(put_ratio)} Put olarak dengeli kalmış."
+            target_comment = "Balinalar şu an net bir yön seçmemiş, yatay veya belirsiz bir bekleyiş var."
+
+        if avg_iv > 70:
+            iv_comment = f"⚠️ **Yüksek Oynaklık Uyarısı (IV %{avg_iv}):** Hissede yakın zamanda çok sert bir patlama bekleniyor!"
+        else:
+            iv_comment = f"Sakin volatilite ortamı (IV %{avg_iv})."
 
         return {
             "Hisse": clean_symbol,
-            "Hisse Yönü (Spot)": stock_signal,
-            "Opsiyon Yönü": option_signal,
             "Fiyat ($)": round(current_price, 2),
             "Günlük %": round(price_change, 2),
-            "Call / Put Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put",
-            "Call Hacim/OI": int(call_vol) if total_vol > 0 else int(call_oi),
-            "Put Hacim/OI": int(put_vol) if total_vol > 0 else int(put_oi),
-            "Sıra Dışı Kat (Vol/OI)": f"{vol_oi_ratio}x",
-            "Beklenen Oynaklık (IV)": f"%{avg_iv}",
             "RSI": round(rsi, 1),
+            "Call Oranı": f"%{int(call_ratio)}",
+            "Put Oranı": f"%{int(put_ratio)}",
+            "Call Hedef Fiyatı": f"${max_strike_call}" if max_strike_call else "Bilinmiyor",
+            "Put Koruma Fiyatı": f"${max_strike_put}" if max_strike_put else "Bilinmiyor",
+            "Balina Eylemi": whale_action,
+            "Hedef Detayı": target_comment,
+            "Volatilite Beklentisi": iv_comment,
+            "Sıra Dışı Kat": f"{vol_oi_ratio}x",
             "Veri Durumu": data_mode
         }
 
     except Exception:
         return None
 
-# --- ARAYÜZ VE ARAMA SEKMELERİ ---
-tab1, tab2 = st.tabs(["🔍 Tek Hisse Ara / Sorgula", "🚀 Toplu Liste Taraması"])
+# Sekmeli Arayüz
+tab1, tab2 = st.tabs(["🔍 Tek Hisse Olta Sorgula", "🚀 Toplu Balina Taraması"])
 
-# --- SEKMELER 1: TEK HİSSE ARAMA ---
+# --- TAB 1: ARAMA KUTUSU ---
 with tab1:
-    st.subheader("Hisse Kodu Girin")
-    search_ticker = st.text_input("Örn: NVDA, TSLA, AAPL, COP...", "NVDA")
+    st.subheader("Hisse Kodu Arayın (Balinalar Nereye Olta Attı?)")
+    search_ticker = st.text_input("Hisse Kodu Girin (Örn: NVDA, TSLA, AAPL, COP...)", "NVDA")
     
-    if st.button("🔎 Hisseyi Analiz Et", type="primary"):
-        with st.spinner(f"{search_ticker.upper()} analiz ediliyor..."):
+    if st.button("🔎 Balina Pozisyonlarını Açıkla", type="primary"):
+        with st.spinner(f"{search_ticker.upper()} inceleniyor..."):
             res = get_complete_analysis(search_ticker)
             if res:
-                st.success(f"{res['Hisse']} Analiz Sonuçları")
+                st.success(f"{res['Hisse']} - Balina Analiz Raporu")
                 
-                # Özet Metrik Kutuları
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Son Fiyat ($)", f"${res['Fiyat ($)']}", f"%{res['Günlük %']}")
-                col2.metric("Hisse Yönü", res['Hisse Yönü (Spot)'])
-                col3.metric("Opsiyon Yönü", res['Opsiyon Yönü'])
-                col4.metric("RSI Seviyesi", res['RSI'])
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Son Fiyat", f"${res['Fiyat ($)']}", f"%{res['Günlük %']}")
+                col2.metric("Call (Yükseliş) Ağırlığı", res['Call Oranı'])
+                col3.metric("Put (Düşüş) Ağırlığı", res['Put Oranı'])
                 
                 st.divider()
-                st.write("📋 **Detaylı Opsiyon & Teknik Tablosu:**")
-                st.json(res)
+                st.subheader("🧠 Balinalar Nereye Olta Attı?")
+                st.info(f"**Durum:** {res['Balina Eylemi']}")
+                st.write(f"🎯 **Hedef Detayı:** {res['Hedef Detayı']}")
+                st.warning(res['Volatilite Beklentisi'])
+                
+                st.divider()
+                col_a, col_b = st.columns(2)
+                col_a.write(f"📌 **En Çok Yığılan Call Hedefi (Strike):** {res['Call Hedef Fiyatı']}")
+                col_b.write(f"📌 **En Çok Yığılan Put Seviyesi (Strike):** {res['Put Koruma Fiyatı']}")
+                st.caption(f"Veri Durumu: {res['Veri Durumu']} | RSI: {res['RSI']}")
             else:
-                st.error("Hisse bulunamadı veya veri alınamadı. Hisse kodunu kontrol edin.")
+                st.error("Hisse bulunamadı veya veri alınamadı. Lütfen geçerli bir hisse kodu girin.")
 
-# --- SEKMELER 2: TOPLU TARAMA ---
+# --- TAB 2: TOPLU TARAMA ---
 with tab2:
-    st.subheader("Popüler Hisselerde Toplu Balina & Sinyal Radarı")
-    if st.button("🚀 Tüm Listeyi Tara"):
+    st.subheader("Toplu Balina Taraması & Yön Açıklamaları")
+    if st.button("🚀 Tüm Listeyi Tara ve Yorumla"):
         signals = []
         progress_bar = st.progress(0)
         status_text = st.empty()
         total = len(DEFAULT_TICKERS)
 
         for idx, t in enumerate(DEFAULT_TICKERS):
-            status_text.text(f"Taranıyor ({idx+1}/{total}): {t}")
+            status_text.text(f"Balina oltaları taranıyor ({idx+1}/{total}): {t}")
             progress_bar.progress((idx + 1) / total)
             res = get_complete_analysis(t)
             if res:
-                signals.append(res)
+                signals.append({
+                    "Hisse": res["Hisse"],
+                    "Fiyat ($)": res["Fiyat ($)"],
+                    "Günlük %": res["Günlük %"],
+                    "Call/Put Dağılımı": f"{res['Call Oranı']} Call / {res['Put Oranı']} Put",
+                    "Balina Yorumu & Olta Yönü": res["Balina Eylemi"],
+                    "Call Hedef Strike": res["Call Hedef Fiyatı"],
+                    "RSI": res["RSI"],
+                    "Veri Durumu": res["Veri Durumu"]
+                })
 
         status_text.empty()
         progress_bar.empty()
