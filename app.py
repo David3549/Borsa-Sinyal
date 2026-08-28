@@ -1,34 +1,21 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="Nasdaq 100 Hisse & Opsiyon Radarı", layout="wide")
-st.title("🎯 Nasdaq 100 Hisse (Al/Sat) & Opsiyon (Call/Put) Radarı")
+st.set_page_config(page_title="Öncü Balina & Opsiyon Radarı", layout="wide")
+st.title("🐋 Öncü Balina Akışı & Sıra Dışı Opsiyon Radarı")
 
 st.write("""
-Bu panel; **Nasdaq 100** hisselerinin tümünü tarayarak **Spot Fiyat Yönünü (Yükseliş/Düşüş)** ve 
-**Opsiyon Akış Eğilimini (Call/Put)** fiyat hareketleri, RSI indikatörü ve hacim dağılımına göre analiz eder.
+Bu radarda amaç standart teknik analiz değil; **balinaların ve kurumsal fonların önceden aldığı pozisyonları (Unusual Volume/OI, Yüksek IV ve Hacim Patlamaları)** tespit ederek hareket başlamadan önce önden haber almaktır.
 """)
 
-# --- NASDAQ 100 HİSSE LİSTESİNİ OTOMATİK ÇEKER ---
-@st.cache_data
-def get_nasdaq100_tickers():
-    try:
-        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        tables = pd.read_html(url)
-        for table in tables:
-            if 'Ticker' in table.columns:
-                return table['Ticker'].tolist()
-            elif 'Symbol' in table.columns:
-                return table['Symbol'].tolist()
-    except Exception:
-        # Bağlantı hatası olursa yedek geniş liste
-        return [
-            "NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "PLTR", "META", "GOOGL", "NFLX",
-            "INTC", "AVGO", "COST", "PEP", "TMUS", "CSCO", "TMUS", "TXN", "QCOM", "AMAT"
-        ]
-
-TICKERS = get_nasdaq100_tickers()
+# Opsiyon Hareketliliği En Yüksek 40 Şirket
+TICKERS = [
+    "NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "PLTR", "META", "GOOGL", "NFLX",
+    "INTC", "AVGO", "COST", "COIN", "MARA", "BABA", "ARM", "MU", "PYPL", "BAC",
+    "DIS", "BA", "SMCI", "ADBE", "CRWD", "PANW", "MRVL", "HOOD", "RBLX", "SQ"
+]
 
 def calculate_rsi(data, window=14):
     delta = data['Close'].diff()
@@ -37,20 +24,18 @@ def calculate_rsi(data, window=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def analyze_stock_and_options(tickers):
+def scan_whale_signals(tickers):
     signals = []
     progress_bar = st.progress(0)
     status_text = st.empty()
     total = len(tickers)
 
     for idx, ticker_symbol in enumerate(tickers):
-        # Ticker sembollerindeki noktaları yfinance uyumlu tireye çevir (.) -> (-)
-        clean_symbol = str(ticker_symbol).replace('.', '-')
-        status_text.text(f"Nasdaq 100 Taranıyor ({idx+1}/{total}): {clean_symbol}")
+        status_text.text(f"Balina Pozisyonları Taranıyor ({idx+1}/{total}): {ticker_symbol}")
         progress_bar.progress((idx + 1) / total)
 
         try:
-            tk = yf.Ticker(clean_symbol)
+            tk = yf.Ticker(ticker_symbol)
             hist = tk.history(period="1mo")
             if hist.empty or len(hist) < 5:
                 continue
@@ -59,74 +44,65 @@ def analyze_stock_and_options(tickers):
             prev_price = hist['Close'].iloc[-2]
             price_change = ((current_price - prev_price) / prev_price) * 100
             
-            # RSI Hesaplama
-            if len(hist) >= 14:
-                hist['RSI'] = calculate_rsi(hist)
-                rsi = hist['RSI'].iloc[-1]
-            else:
-                rsi = 50.0
+            rsi = calculate_rsi(hist).iloc[-1] if len(hist) >= 14 else 50.0
 
-            # 1. Opsiyon Akış Verisi
-            call_vol, put_vol = 0, 0
-            try:
-                expirations = tk.expirations
-                if expirations:
-                    nearest_exp = expirations[0]
-                    opt = tk.option_chain(nearest_exp)
-                    
-                    if opt.calls is not None and not opt.calls.empty and 'volume' in opt.calls:
-                        call_vol = opt.calls['volume'].fillna(0).sum()
-                    
-                    if opt.puts is not None and not opt.puts.empty and 'volume' in opt.puts:
-                        put_vol = opt.puts['volume'].fillna(0).sum()
-            except Exception:
-                pass
+            # --- OPSİYON VE BALİNA ANALİZİ ---
+            expirations = tk.expirations
+            if not expirations:
+                continue
 
-            total_opt_vol = call_vol + put_vol
-            if total_opt_vol > 0:
-                call_ratio = (call_vol / total_opt_vol) * 100
-                put_ratio = (put_vol / total_opt_vol) * 100
-            else:
-                call_ratio, put_ratio = 50.0, 50.0
+            nearest_exp = expirations[0]
+            opt = tk.option_chain(nearest_exp)
 
-            # 2. HİSSE YÖNÜ HESAPLAMA (Spot Fiyat)
-            stock_score = 50
-            if rsi < 42: stock_score += 25
-            elif rsi > 62: stock_score -= 25
+            calls = opt.calls.dropna(subset=['volume', 'openInterest']) if opt.calls is not None else pd.DataFrame()
+            puts = opt.puts.dropna(subset=['volume', 'openInterest']) if opt.puts is not None else pd.DataFrame()
+
+            call_vol = calls['volume'].sum() if not calls.empty else 0
+            put_vol = puts['volume'].sum() if not puts.empty else 0
+            total_vol = call_vol + put_vol
+
+            if total_vol == 0:
+                continue
+
+            call_ratio = (call_vol / total_vol) * 100
+            put_ratio = (put_vol / total_vol) * 100
+
+            # Implied Volatility (Ortalama Oynaklık Beklentisi)
+            avg_iv_calls = calls['impliedVolatility'].mean() if not calls.empty else 0
+            avg_iv_puts = puts['impliedVolatility'].mean() if not puts.empty else 0
+            avg_iv = round(((avg_iv_calls + avg_iv_puts) / 2) * 100, 1)
+
+            # Vol / OI Oranı (Sıra Dışı Akış Hesabı)
+            calls_vol_oi = (calls['volume'] / calls['openInterest'].replace(0, np.nan)).mean() if not calls.empty else 0
+            puts_vol_oi = (puts['volume'] / puts['openInterest'].replace(0, np.nan)).mean() if not puts.empty else 0
+            max_vol_oi = round(max(calls_vol_oi if not np.isnan(calls_vol_oi) else 0, 
+                                   puts_vol_oi if not np.isnan(puts_vol_oi) else 0), 2)
+
+            # --- SİNYAL ÜRETME ---
+            whale_status = "⚪ normal Akış"
             
-            if price_change > 0.8: stock_score += 15
-            elif price_change < -0.8: stock_score -= 15
-
-            if stock_score >= 65:
-                stock_signal = "🟢 YÜKSELİŞ (AL)"
-            elif stock_score <= 35:
-                stock_signal = "🔴 DÜŞÜŞ (SAT)"
-            else:
-                stock_signal = "⚖️ NÖTR / YATAY"
-
-            # 3. OPSİYON YÖNÜ HESAPLAMA
-            option_score = 50
-            if call_ratio > 55: option_score += 30
-            elif put_ratio > 55: option_score -= 30
-
-            if stock_score >= 65: option_score += 10
-            elif stock_score <= 35: option_score -= 10
-
-            if option_score >= 65:
-                option_signal = "🟢 CALL"
-            elif option_score <= 35:
-                option_signal = "🔴 PUT"
-            else:
-                option_signal = "⚖️ KARARSIZ"
+            # Sınıflandırma
+            if max_vol_oi > 1.2 or avg_iv > 80:
+                if call_ratio >= 65:
+                    whale_status = "🚨 OLAĞANDIŞI BULLISH BALİNA"
+                elif put_ratio >= 65:
+                    whale_status = "🚨 OLAĞANDIŞI BEARISH BALİNA"
+                else:
+                    whale_status = "⚡ YÜKSEK VOLATİLİTE SİNYALİ"
+            elif call_ratio >= 68:
+                whale_status = "🟢 CALL AĞIRLIKLI"
+            elif put_ratio >= 68:
+                whale_status = "🔴 PUT AĞIRLIKLI"
 
             signals.append({
-                "Hisse": clean_symbol,
-                "Hisse Yönü": stock_signal,
-                "Opsiyon Yönü": option_signal,
+                "Hisse": ticker_symbol,
+                "Balina Sinyali": whale_status,
                 "Fiyat ($)": round(current_price, 2),
                 "Günlük %": round(price_change, 2),
-                "RSI": round(rsi, 1),
-                "Opsiyon Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put" if total_opt_vol > 0 else "Veri Yok / Kapalı"
+                "Call/Put Dağılımı": f"%{int(call_ratio)} Call / %{int(put_ratio)} Put",
+                "Vol / OI (Sıra Dışı Katı)": f"{max_vol_oi}x",
+                "Beklenen Volatolite (IV)": f"%{avg_iv}",
+                "RSI": round(rsi, 1)
             })
 
         except Exception:
@@ -134,13 +110,20 @@ def analyze_stock_and_options(tickers):
 
     status_text.empty()
     progress_bar.empty()
-    return pd.DataFrame(signals)
+    
+    df_res = pd.DataFrame(signals)
+    if not df_res.empty:
+        # Önceliği Olağanüstü Balina Akışlarına Ver
+        df_res['Öncelik'] = df_res['Balina Sinyali'].apply(lambda x: 0 if '🚨' in x else (1 if '⚡' in x else 2))
+        df_res = df_res.sort_values(by=['Öncelik', 'Vol / OI (Sıra Dışı Katı)'], ascending=[True, False]).drop(columns=['Öncelik'])
+    
+    return df_res
 
-if st.button("🚀 Tüm Nasdaq 100 Hisselerini Tara", type="primary"):
-    with st.spinner("Nasdaq 100 hisseleri ve opsiyon zincirleri taranıyor..."):
-        df = analyze_stock_and_options(TICKERS)
+if st.button("🚨 Öncü Balina ve Opsiyon Akışını Tara", type="primary"):
+    with st.spinner("Balina kontratları ve sıra dışı hacimler taranıyor..."):
+        df = scan_whale_signals(TICKERS)
         if not df.empty:
-            st.success(f"Tarama tamamlandı! Toplam {len(df)} Nasdaq 100 hissesi analiz edildi.")
+            st.success("Öncü analiz tamamlandı! Sıra dışı balina hareketleri en üstte listelenmiştir.")
             st.dataframe(df, use_container_width=True)
         else:
-            st.error("Veri çekilemedi. Lütfen tekrar deneyin.")
+            st.warning("Veri çekilemedi veya kapalı piyasa nedeniyle veri bulunamadı.")
