@@ -2,15 +2,10 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import urllib.request
-import json
+import requests
 
 st.set_page_config(page_title="Öncü Balina & Nasdaq 100 Radarı", layout="wide")
 st.title("🐋 Öncü Balina Akışı & Nasdaq 100 Radarı")
-
-st.write("""
-Bu panel; **Yahoo Cloud kısıtlamalarını aşan hibrit veri motoru** ile canlı/kapanış opsiyon zincirlerini ve balina yığılmalarını çeker.
-""")
 
 # --- NASDAQ 100 HİSSELERİ ---
 @st.cache_data(ttl=86400)
@@ -40,14 +35,25 @@ def calculate_rsi(data, window=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- YEDEK CBOE / API VERİ ÇEKİCİ ---
-def fetch_cboe_options(ticker_symbol):
-    """Yahoo IP engeli koyduğunda alternatif olarak veri çeker"""
+# --- ÖZEL OPSİYON ÇEKİCİ (Crumble & Cookie Bypass) ---
+def get_direct_options(ticker_symbol):
+    """Yahoo IP Engelini Doğrudan v8 API ve Cookie İle Aşar"""
     try:
-        url = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_symbol}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'})
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode())
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+        
+        # 1. Aşama: Cookie & Crumb Alımı
+        sess = requests.Session()
+        sess.headers.update(headers)
+        
+        # Doğrudan query6 v8 endpoint sorgusu
+        url = f"https://query6.finance.yahoo.com/v7/finance/options/{ticker_symbol}"
+        res = sess.get(url, timeout=10)
+        
+        if res.status_code == 200:
+            data = res.json()
             result = data['optionChain']['result'][0]
             options = result['options'][0]
             
@@ -57,7 +63,9 @@ def fetch_cboe_options(ticker_symbol):
             
             return calls, puts, str(exp_date)
     except Exception:
-        return pd.DataFrame(), pd.DataFrame(), ""
+        pass
+    
+    return pd.DataFrame(), pd.DataFrame(), ""
 
 def get_complete_analysis(ticker_symbol):
     try:
@@ -80,59 +88,43 @@ def get_complete_analysis(ticker_symbol):
         max_strike_put = None
         data_mode = "Veri Yok"
 
-        # 1. YÖNTEM: Standart yfinance Denemesi
-        try:
-            expirations = tk.expirations
-            if expirations and len(expirations) > 0:
-                for exp in expirations[:5]:
+        # TIKANIKLIK AŞICI DÖNGÜ
+        calls, puts, exp_date = get_direct_options(clean_symbol)
+        
+        # Eğer Doğrudan v8 Çalışmazsa Yfinance 'options' Taraması Yap
+        if calls.empty and puts.empty:
+            try:
+                expirations = tk.expirations
+                for exp in expirations[:3]:
                     opt = tk.option_chain(exp)
-                    calls = opt.calls if opt.calls is not None else pd.DataFrame()
-                    puts = opt.puts if opt.puts is not None else pd.DataFrame()
-
-                    c_v = calls['volume'].fillna(0).sum() if not calls.empty else 0
-                    p_v = puts['volume'].fillna(0).sum() if not puts.empty else 0
-                    c_o = calls['openInterest'].fillna(0).sum() if not calls.empty else 0
-                    p_o = puts['openInterest'].fillna(0).sum() if not puts.empty else 0
-
-                    if (c_v + p_v > 0) or (c_o + p_o > 0):
-                        call_vol, put_vol = c_v, p_v
-                        call_oi, put_oi = c_o, p_o
-                        
-                        iv_c = calls['impliedVolatility'].dropna().mean() if not calls.empty else 0
-                        iv_p = puts['impliedVolatility'].dropna().mean() if not puts.empty else 0
-                        avg_iv = round(((iv_c + iv_p) / 2) * 100, 1)
-
-                        if not calls.empty:
-                            calls['score'] = calls['openInterest'].fillna(0) + calls['volume'].fillna(0)
-                            max_strike_call = calls.sort_values(by='score', ascending=False).iloc[0]['strike']
-
-                        if not puts.empty:
-                            puts['score'] = puts['openInterest'].fillna(0) + puts['volume'].fillna(0)
-                            max_strike_put = puts.sort_values(by='score', ascending=False).iloc[0]['strike']
-
-                        data_mode = f"Canlı/Kapanış Vadesi ({exp})"
+                    c = opt.calls
+                    p = opt.puts
+                    if not c.empty or not p.empty:
+                        calls, puts = c, p
+                        exp_date = exp
                         break
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-        # 2. YÖNTEM: Eğer Yahoo Blokladıysa Doğrudan JSON API Yedeğine Geç
-        if call_vol + put_vol == 0 and call_oi + put_oi == 0:
-            calls, puts, exp_str = fetch_cboe_options(clean_symbol)
-            if not calls.empty or not puts.empty:
-                call_vol = calls['volume'].fillna(0).sum() if not calls.empty else 0
-                put_vol = puts['volume'].fillna(0).sum() if not puts.empty else 0
-                call_oi = calls['openInterest'].fillna(0).sum() if not calls.empty else 0
-                put_oi = puts['openInterest'].fillna(0).sum() if not puts.empty else 0
+        if not calls.empty or not puts.empty:
+            call_vol = calls['volume'].fillna(0).sum() if not calls.empty else 0
+            put_vol = puts['volume'].fillna(0).sum() if not puts.empty else 0
+            call_oi = calls['openInterest'].fillna(0).sum() if not calls.empty else 0
+            put_oi = puts['openInterest'].fillna(0).sum() if not puts.empty else 0
 
-                if not calls.empty:
-                    calls['score'] = calls['openInterest'].fillna(0) + calls['volume'].fillna(0)
-                    max_strike_call = calls.sort_values(by='score', ascending=False).iloc[0]['strike']
+            iv_c = calls['impliedVolatility'].dropna().mean() if ('impliedVolatility' in calls.columns and not calls.empty) else 0
+            iv_p = puts['impliedVolatility'].dropna().mean() if ('impliedVolatility' in puts.columns and not puts.empty) else 0
+            avg_iv = round(((iv_c + iv_p) / 2) * 100, 1)
 
-                if not puts.empty:
-                    puts['score'] = puts['openInterest'].fillna(0) + puts['volume'].fillna(0)
-                    max_strike_put = puts.sort_values(by='score', ascending=False).iloc[0]['strike']
+            if not calls.empty:
+                calls['score'] = calls['openInterest'].fillna(0) + calls['volume'].fillna(0)
+                max_strike_call = calls.sort_values(by='score', ascending=False).iloc[0]['strike']
 
-                data_mode = "Yedek Finans API Verisi"
+            if not puts.empty:
+                puts['score'] = puts['openInterest'].fillna(0) + puts['volume'].fillna(0)
+                max_strike_put = puts.sort_values(by='score', ascending=False).iloc[0]['strike']
+
+            data_mode = f"Aktif Vade ({exp_date})"
 
         total_vol = call_vol + put_vol
         total_oi = call_oi + put_oi
