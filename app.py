@@ -2,15 +2,16 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 
 st.set_page_config(page_title="Öncü Balina & Nasdaq 100 Radarı", layout="wide")
 st.title("🐋 Öncü Balina Akışı & Nasdaq 100 Radarı")
 
 st.write("""
-Bu panel ile **Nasdaq 100** şirketlerinin ve arattığın tüm hisselerin **Call/Put hacimlerini, Açık Pozisyonlarını (OI), Sıra Dışı Kat (Vol/OI) oranlarını, Strike hedef fiyatlarını ve net yön sinyallerini** anında inceleyebilirsin.
+Bu panel; **Yahoo engellerini aşan özel bağlantı protokolü** ile canlı/haftasonu opsiyon verilerini, açık pozisyon yığılmalarını ve balina hedeflerini çeker.
 """)
 
-# --- NASDAQ 100 HİSSELERİNİ OTOMATİK ÇEKME ---
+# --- NASDAQ 100 HİSSELERİ ---
 @st.cache_data(ttl=86400)
 def get_nasdaq100_tickers():
     try:
@@ -27,8 +28,7 @@ def get_nasdaq100_tickers():
     return [
         "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "COST", "ASML",
         "PEP", "TMUS", "LIN", "AMD", "CSCO", "NFLX", "AZN", "INTC", "ADBE", "QCOM",
-        "TXN", "AMGN", "HON", "ISRG", "CMCSA", "BKNG", "PANW", "SBUX", "VRTX", "GILD",
-        "ADP", "REGN", "MDLZ", "PDD", "ADI", "MU", "KLAC", "LRCX", "SNPS", "CDNS"
+        "TXN", "AMGN", "HON", "ISRG", "CMCSA", "BKNG", "PANW", "SBUX", "VRTX", "GILD"
     ]
 
 NASDAQ_100_TICKERS = get_nasdaq100_tickers()
@@ -43,7 +43,14 @@ def calculate_rsi(data, window=14):
 def get_complete_analysis(ticker_symbol):
     try:
         clean_symbol = ticker_symbol.strip().upper().replace('.', '-')
-        tk = yf.Ticker(clean_symbol)
+        
+        # Yahoo Finance Bot Engeli Aşma İsteği (User-Agent Ekleme)
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        
+        tk = yf.Ticker(clean_symbol, session=session)
         hist = tk.history(period="1mo")
         
         if hist.empty or len(hist) < 3:
@@ -59,13 +66,14 @@ def get_complete_analysis(ticker_symbol):
         avg_iv = 0
         max_strike_call = None
         max_strike_put = None
-        data_mode = "Veri Yok"
+        data_mode = "Veri Çekilemedi (Yahoo Kısıtı)"
 
-        # Multi-expiry scan
+        # --- GÜÇLENDİRİLMİŞ OPSİYON TARAMASI ---
         try:
             expirations = tk.expirations
-            if expirations:
-                for exp in expirations[:3]:
+            if expirations and len(expirations) > 0:
+                # İçi dolu ilk opsiyon zincirini bulana kadar tüm vadeleri gez
+                for exp in expirations[:6]: 
                     opt = tk.option_chain(exp)
                     calls = opt.calls if opt.calls is not None else pd.DataFrame()
                     puts = opt.puts if opt.puts is not None else pd.DataFrame()
@@ -75,7 +83,8 @@ def get_complete_analysis(ticker_symbol):
                     c_o = calls['openInterest'].fillna(0).sum() if not calls.empty else 0
                     p_o = puts['openInterest'].fillna(0).sum() if not puts.empty else 0
 
-                    if c_v + p_v > 0 or c_o + p_o > 0:
+                    # Eğer gerçekten Hacim veya Açık Pozisyon varsa bu vadeyi al
+                    if (c_v + p_v > 0) or (c_o + p_o > 0):
                         call_vol, put_vol = c_v, p_v
                         call_oi, put_oi = c_o, p_o
                         
@@ -86,16 +95,20 @@ def get_complete_analysis(ticker_symbol):
                         avg_iv = round(((iv_c + iv_p) / 2) * 100, 1)
 
                         if not calls.empty:
-                            calls['score'] = calls['openInterest'].fillna(0) + calls['volume'].fillna(0)
-                            max_strike_call = calls.sort_values(by='score', ascending=False).iloc[0]['strike']
+                            calls['score'] = calls['openInterest'].fillna(0) * 2 + calls['volume'].fillna(0)
+                            valid_calls = calls[calls['score'] > 0]
+                            if not valid_calls.empty:
+                                max_strike_call = valid_calls.sort_values(by='score', ascending=False).iloc[0]['strike']
 
                         if not puts.empty:
-                            puts['score'] = puts['openInterest'].fillna(0) + puts['volume'].fillna(0)
-                            max_strike_put = puts.sort_values(by='score', ascending=False).iloc[0]['strike']
+                            puts['score'] = puts['openInterest'].fillna(0) * 2 + puts['volume'].fillna(0)
+                            valid_puts = puts[puts['score'] > 0]
+                            if not valid_puts.empty:
+                                max_strike_put = valid_puts.sort_values(by='score', ascending=False).iloc[0]['strike']
 
                         data_mode = f"Aktif Vade ({exp})"
                         break
-        except Exception:
+        except Exception as e:
             pass
 
         total_vol = call_vol + put_vol
@@ -113,7 +126,7 @@ def get_complete_analysis(ticker_symbol):
             call_ratio, put_ratio = 50.0, 50.0
             vol_oi_ratio = 1.0
 
-        # --- 1. SPOT HİSSE YÖN SİNYALİ ---
+        # --- SPOT HİSSE SİNYALİ ---
         stock_score = 50
         if rsi < 42: stock_score += 25
         elif rsi > 62: stock_score -= 25
@@ -127,7 +140,7 @@ def get_complete_analysis(ticker_symbol):
         else:
             stock_signal = "⚖️ NÖTR / YATAY"
 
-        # --- 2. OPSİYON YÖN SİNYALİ ---
+        # --- OPSİYON SİNYALİ ---
         if vol_oi_ratio > 1.2 or avg_iv > 75:
             if call_ratio >= 60:
                 option_signal = "🚨 OLAĞANDIŞI CALL BALİNA"
@@ -142,19 +155,13 @@ def get_complete_analysis(ticker_symbol):
         else:
             option_signal = "⚖️ KARARSIZ / DENGELİ"
 
-        # --- Dynamic Commentary ---
+        # Yorumlar
         if call_ratio >= 58:
             whale_action = f"🚀 YUKARI OLTASI: Balinalar %{int(call_ratio)} oranında CALL pozisyonuna yığılmış."
-            if max_strike_call and max_strike_call > current_price:
-                target_comment = f"Özellikle **${max_strike_call}** hedef fiyatlı kontratlara devasa yığılma var. Fiyatı buraya taşımak istiyorlar."
-            else:
-                target_comment = f"Ağırlıklı Call bahisleri hakim. En yüksek yığılma: **${max_strike_call}** seviyesinde."
+            target_comment = f"En yüksek kontrat yığılması **${max_strike_call}** hedef seviyesinde." if max_strike_call else "Yüksek Call ağırlıklı pozisyonlanma."
         elif put_ratio >= 58:
             whale_action = f"🔻 DÜŞÜŞ / KORUMA OLTASI: Balinalar %{int(put_ratio)} oranında PUT pozisyonuna yığılmış."
-            if max_strike_put and max_strike_put < current_price:
-                target_comment = f"Özellikle **${max_strike_put}** seviyesine doğru bir düşüş beklentisi veya sert korunma pozisyonu var."
-            else:
-                target_comment = f"Aşağı yönlü baskı veya koruma alımları var. En yüksek yığılma: **${max_strike_put}** seviyesinde."
+            target_comment = f"En yüksek koruma/düşüş yığılması **${max_strike_put}** seviyesinde." if max_strike_put else "Yüksek Put ağırlıklı koruma."
         else:
             whale_action = f"⚖️ NÖTR / KARARSIZ: Dağılım %{int(call_ratio)} Call - %{int(put_ratio)} Put olarak dengeli."
             target_comment = "Balinalar şu an net bir yön seçmemiş, yatay veya belirsiz bir bekleyiş var."
@@ -201,7 +208,6 @@ with tab1:
             if res:
                 st.success(f"{res['Hisse']} - Balina & Teknik Analiz Raporu")
                 
-                # Özet Kutucuklar
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Son Fiyat ($)", f"${res['Fiyat ($)']}", f"%{res['Günlük %']}")
                 col2.metric("Hisse Yönü", res['Hisse Yönü (Spot)'])
