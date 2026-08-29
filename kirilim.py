@@ -1,26 +1,22 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 import datetime
+import requests
 
 st.set_page_config(page_title="Nasdaq 100 Kırılım ve Mum Radarı", layout="wide")
 st.title("📊 Nasdaq 100 Mum & Hacim Kırılım Radarı")
 
-# Hafta Sonu Bilgisi
 bugun = datetime.date.today()
 if bugun.weekday() >= 5:
     st.warning("⚠️ PİYASALAR KAPALI. GÖSTERİLEN FİYATLAR EN SON İŞLEM GÜNÜNÜN KAPANIŞ VERİLERİDİR.")
 
-# Gerçek güncel piyasa kapanış fiyatları sözlüğü (Ağustos 2026 güncel)
-REAL_MARKET_PRICES = {
-    "NVDA": 125.50, "AAPL": 319.70, "MSFT": 415.20, "AMZN": 175.40,
-    "GOOGL": 172.80, "META": 510.30, "TSLA": 222.10, "AVGO": 165.50,
-    "COST": 880.00, "AMD": 142.30, "PEP": 168.00, "TMUS": 182.50,
-    "LIN": 460.00, "CSCO": 48.50, "NFLX": 660.00, "AZN": 68.20,
-    "INTC": 20.10, "ADBE": 545.00, "QCOM": 182.00, "TXN": 195.00
-}
+NASDAQ_100_TICKERS = [
+    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "COST", "AMD",
+    "PEP", "TMUS", "LIN", "CSCO", "NFLX", "AZN", "INTC", "ADBE", "QCOM", "TXN"
+]
 
-NASDAQ_100_TICKERS = list(REAL_MARKET_PRICES.keys())
-
+@st.cache_data(ttl=0)
 def analyze_candlestick_breakout(ticker_symbol):
     raw_input = ticker_symbol.strip().upper()
     
@@ -31,20 +27,64 @@ def analyze_candlestick_breakout(ticker_symbol):
     }
     clean_symbol = ticker_map.get(raw_input, raw_input).replace('.', '-')
     
-    # Doğru fiyatı sözlükten al, listede yoksa varsayılan 150 ver
-    current_price = REAL_MARKET_PRICES.get(clean_symbol, 150.0)
-    prev_close = round(current_price * 0.99, 2)
-    resistance_level = round(current_price * 1.05, 2)
-    support_level = round(current_price * 0.95, 2)
-    vol_multiplier = 1.2
+    # Varsayılan değerler
+    current_price = 100.0
+    prev_close = 99.0
+    resistance_level = 105.0
+    support_level = 95.0
+    vol_multiplier = 1.0
+    
+    try:
+        # Yahoo Finance engeline takılmamak için tarayıcı kimliği (User-Agent) ekliyoruz
+        session = requests.Session()
+        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
         
-    # Kırılım ve Yön Tespiti
+        ticker = yf.Ticker(clean_symbol, session=session)
+        df = ticker.history(period="1mo", interval="1d")
+        
+        if not df.empty and len(df) >= 2:
+            closes = df['Close'].dropna()
+            highs = df['High'].dropna()
+            lows = df['Low'].dropna()
+            volumes = df['Volume'].dropna()
+            
+            if len(closes) > 0:
+                current_price = float(closes.iloc[-1])
+            if len(closes) > 1:
+                prev_close = float(closes.iloc[-2])
+            
+            if len(highs) >= 15:
+                resistance_level = round(float(highs.iloc[-15:-1].max()), 2)
+            else:
+                resistance_level = round(current_price * 1.03, 2)
+                
+            if len(lows) >= 15:
+                support_level = round(float(lows.iloc[-15:-1].min()), 2)
+            else:
+                support_level = round(current_price * 0.97, 2)
+                
+            if len(volumes) >= 11:
+                avg_vol = volumes.iloc[-11:-1].mean()
+                last_vol = volumes.iloc[-1]
+                if avg_vol > 0:
+                    vol_multiplier = round(float(last_vol / avg_vol), 2)
+    except Exception as e:
+        pass
+        
     if current_price > resistance_level:
-        breakout_status = "🚀 DİRENÇ NET KIRILDI (Hacimli Yükseliş)"
-        action_advice = "🟢 ALIM YÖNLÜ (Long / Call)"
+        if vol_multiplier >= 1.2:
+            breakout_status = "🚀 DİRENÇ NET KIRILDI (Hacimli Yükseliş)"
+            action_advice = "🟢 ALIM YÖNLÜ (Long / Call)"
+        else:
+            breakout_status = "⚠️ Direnç Üstünde Ama Hacim Zayıf"
+            action_advice = "🟡 TEMKİNLİ İZLE"
     elif current_price < support_level:
-        breakout_status = "🔻 DESTEK NET KIRILDI (Hacimli Düşüş)"
-        action_advice = "🔴 SATIM YÖNLÜ (Short / Put)"
+        if vol_multiplier >= 1.2:
+            breakout_status = "🔻 DESTEK NET KIRILDI (Hacimli Düşüş)"
+            action_advice = "🔴 SATIM YÖNLÜ (Short / Put)"
+        else:
+            breakout_status = "⚠️ Destek Altında Ama Hacim Zayıf"
+            action_advice = "🟡 TEMKİNLİ İZLE"
     else:
         breakout_status = "🔒 Kanal İçinde (Kırılım Bekleniyor)"
         action_advice = "⚪ BEKLE"
@@ -59,8 +99,7 @@ def analyze_candlestick_breakout(ticker_symbol):
         "Kritik Destek": support_level,
         "Hacim Durumu": f"{vol_multiplier}x Ort.",
         "Kırılım Durumu": breakout_status,
-        "Net Karar": action_advice,
-        "Detay Açıklama": f"Son kapanış ${round(current_price, 2)} seviyesinde. Direnç: ${resistance_level}, Destek: ${support_level}."
+        "Net Karar": action_advice
     }
 
 tab_tek, tab_toplu = st.tabs(["🔍 Tek Hisse Kırılım Sorgula", "🚀 Nasdaq 100 Toplu Tarama"])
@@ -70,21 +109,20 @@ with tab_tek:
     search_ticker = st.text_input("Hisse Kodu veya Adı Girin (Örn: AAPL, NVDA, Tesla)", "AAPL")
     
     if st.button("🔎 Hisse Kırılımını İncele", type="primary"):
-        res = analyze_candlestick_breakout(search_ticker)
-        if res:
-            st.success(f"{res['Hisse']} - Mum & Kırılım Raporu")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Son Fiyat ($)", f"${res['Son Fiyat ($)']}", f"%{res['Günlük Değişim %']}")
-            col2.metric("Net Karar", res['Net Karar'])
-            col3.metric("Hacim Durumu", res['Hacim Durumu'])
-            col4.metric("Kırılım Durumu", res['Kırılım Durumu'])
+        with st.spinner("Güncel veriler çekiliyor..."):
+            res = analyze_candlestick_breakout(search_ticker)
+            if res:
+                st.success(f"{res['Hisse']} - Mum & Kırılım Raporu")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Son Fiyat ($)", f"${res['Son Fiyat ($)']}", f"%{res['Günlük Değişim %']}")
+                col2.metric("Net Karar", res['Net Karar'])
+                col3.metric("Hacim Durumu", res['Hacim Durumu'])
+                col4.metric("Kırılım Durumu", res['Kırılım Durumu'])
 
-            st.divider()
-            st.info(f"📌 **Durum Özeti:** {res['Detay Açıklama']}")
-            
-            col_a, col_b = st.columns(2)
-            col_a.write(f"📈 **Kritik Direnç Seviyesi:** ${res['Kritik Direnç']}")
-            col_b.write(f"📉 **Kritik Destek Seviyesi:** ${res['Kritik Destek']}")
+                st.divider()
+                col_a, col_b = st.columns(2)
+                col_a.write(f"📈 **Kritik Direnç Seviyesi:** ${res['Kritik Direnç']}")
+                col_b.write(f"📉 **Kritik Destek Seviyesi:** ${res['Kritik Destek']}")
 
 with tab_toplu:
     st.subheader("Nasdaq 100 Otomatik Kırılım ve Mum Tarayıcısı")
@@ -92,13 +130,17 @@ with tab_toplu:
     
     if st.button("🔍 Mum ve Kırılımları Tara", type="primary"):
         results = []
+        my_bar = st.progress(0)
         selected_tickers = NASDAQ_100_TICKERS[:scan_count]
         
-        for t in selected_tickers:
+        for i, t in enumerate(selected_tickers):
+            my_bar.progress((i + 1) / len(selected_tickers))
             res = analyze_candlestick_breakout(t)
             if res:
                 results.append(res)
                 
+        my_bar.empty()
+        
         if results:
             df_res = pd.DataFrame(results)
             st.dataframe(df_res, use_container_width=True)
