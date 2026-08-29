@@ -12,14 +12,23 @@ NASDAQ_100_TICKERS = [
 
 @st.cache_data(ttl=300)
 def analyze_candlestick_breakout(ticker_symbol):
-    clean_symbol = ticker_symbol.strip().upper().replace('.', '-')
+    raw_input = ticker_symbol.strip().upper()
     
-    # Hafta sonu / yedek baz fiyatlar (Cuma kapanışlarına yakın)
+    # Genişletilmiş isim eşleme ve düzeltme tablosu
+    ticker_map = {
+        "AAPLE": "AAPL", "APPLE": "AAPL", "MICROSOFT": "MSFT", 
+        "TESLA": "TSLA", "AMAZON": "AMZN", "GOOGLE": "GOOGL", "NVIDIA": "NVDA",
+        "META": "META", "AMD": "AMD", "NETFLIX": "NFLX"
+    }
+    clean_symbol = ticker_map.get(raw_input, raw_input).replace('.', '-')
+    
+    # Güncel piyasa kapanış baz fiyatları (Hafta sonu koruması)
     fallback_prices = {
-        "NVDA": 217.55, "AAPL": 319.70, "MSFT": 513.53, "AMZN": 266.43,
-        "GOOGL": 346.59, "META": 578.02, "TSLA": 348.75, "AVGO": 368.79,
-        "COST": 945.47, "AMD": 465.58, "PEP": 175.20, "TMUS": 170.10,
-        "LIN": 450.00, "CSCO": 49.20, "NFLX": 690.00, "AZN": 68.50
+        "NVDA": 130.00, "AAPL": 225.00, "MSFT": 420.00, "AMZN": 185.00,
+        "GOOGL": 175.00, "META": 500.00, "TSLA": 220.00, "AVGO": 160.00,
+        "COST": 850.00, "AMD": 150.00, "PEP": 180.00, "TMUS": 185.00,
+        "LIN": 440.00, "CSCO": 48.00, "NFLX": 650.00, "AZN": 70.00,
+        "INTC": 20.00, "ADBE": 520.00, "QCOM": 170.00, "TXN": 190.00
     }
     
     current_price = fallback_prices.get(clean_symbol, 150.0)
@@ -85,7 +94,7 @@ def analyze_candlestick_breakout(ticker_symbol):
         "Hacim Durumu": f"{vol_multiplier}x Ort.",
         "Kırılım Durumu": breakout_status,
         "Net Karar": action_advice,
-        "Detay Açıklama": f"Son mum kapanışı ${current_price} seviyesinde. Son 14 günün direnci ${resistance_level}, desteği ${support_level} olarak test ediliyor."
+        "Detay Açıklama": f"Son mum kapanışı ${round(current_price, 2)} seviyesinde. Son 14 günün direnci ${resistance_level}, desteği ${support_level} olarak test ediliyor."
     }
 
 # Arayüz Sekmeleri
@@ -93,7 +102,7 @@ tab_tek, tab_toplu = st.tabs(["🔍 Tek Hisse Kırılım Sorgula", "🚀 Nasdaq 
 
 with tab_tek:
     st.subheader("Özel Hisse Kırılım ve Mum Analizi")
-    search_ticker = st.text_input("Hisse Kodu Girin (Örn: NVDA, TSLA, AAPL)", "NVDA")
+    search_ticker = st.text_input("Hisse Kodu veya Adı Girin (Örn: AAPL, NVDA, Tesla)", "AAPL")
     
     if st.button("🔎 Hisse Kırılımını İncele", type="primary"):
         with st.spinner(f"{search_ticker.upper()} mumları ve hacmi taranıyor..."):
@@ -112,9 +121,6 @@ with tab_tek:
                 col_a, col_b = st.columns(2)
                 col_a.write(f"📈 **Kritik Direnç Seviyesi:** ${res['Kritik Direnç']}")
                 col_b.write(f"📉 **Kritik Destek Seviyesi:** ${res['Kritik Destek']}")
-                
-                st.divider()
-                st.json(res)
 
 with tab_toplu:
     st.subheader("Nasdaq 100 Otomatik Kırılım ve Mum Tarayıcısı")
