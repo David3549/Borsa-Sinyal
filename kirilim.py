@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import requests
+import io
 import datetime
 
 st.set_page_config(page_title="Nasdaq 100 Kırılım ve Mum Radarı", layout="wide")
@@ -17,10 +19,21 @@ NASDAQ_100_TICKERS = [
 @st.cache_data(ttl=300)
 def get_stock_data(ticker):
     url = f"https://stooq.com/q/d/l/?s={ticker.lower()}.us&i=d"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
-        df = pd.read_csv(url)
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code != 200 or len(response.text) < 50:
+            return None
+            
+        df = pd.read_csv(io.StringIO(response.text))
         if df.empty or 'Close' not in df.columns:
             return None
+            
+        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+        df['High'] = pd.to_numeric(df['High'], errors='coerce')
+        df['Low'] = pd.to_numeric(df['Low'], errors='coerce')
+        df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
+        
         df = df.dropna(subset=['Close'])
         if len(df) < 2:
             return None
