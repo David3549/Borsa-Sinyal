@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
+import requests
 import datetime
 
 st.set_page_config(page_title="Nasdaq 100 Kırılım ve Mum Radarı", layout="wide")
@@ -16,17 +16,11 @@ NASDAQ_100_TICKERS = [
 ]
 
 @st.cache_data(ttl=60)
-def analyze_candlestick_breakout(ticker_symbol):
-    raw_input = ticker_symbol.strip().upper()
+def get_stock_data_safe(ticker):
+    # Yahoo Finance'in bulut engeline takılmamak için doğrudan JSON v8 endpoint'ini kullanıyoruz
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1mo&interval=1d"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     
-    ticker_map = {
-        "AAPLE": "AAPL", "APPLE": "AAPL", "MICROSOFT": "MSFT", 
-        "TESLA": "TSLA", "AMAZON": "AMZN", "GOOGLE": "GOOGL", "NVIDIA": "NVDA",
-        "META": "META", "AMD": "AMD", "NETFLIX": "NFLX"
-    }
-    clean_symbol = ticker_map.get(raw_input, raw_input).replace('.', '-')
-    
-    # Varsayılan emniyet fiyatları (Yahoo veri veremezse kullanılır)
     current_price = 150.0
     prev_close = 148.5
     resistance_level = 155.0
@@ -34,62 +28,54 @@ def analyze_candlestick_breakout(ticker_symbol):
     vol_multiplier = 1.0
     
     try:
-        data = yf.download(clean_symbol, period="1mo", interval="1d", progress=False)
-        if not data.empty:
-            # MultiIndex sütun yapılarını düzelt
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
-                
-            closes = data['Close'].dropna()
-            highs = data['High'].dropna()
-            lows = data['Low'].dropna()
-            volumes = data['Volume'].dropna()
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            result = data['chart']['result'][0]
+            quote = result['indicators']['quote'][0]
             
-            if not closes.empty:
-                current_price = float(closes.iloc[-1])
+            closes = [c for c in quote['close'] if c is not None]
+            highs = [h for h in quote['high'] if h is not None]
+            lows = [l for l in quote['low'] if l is not None]
+            volumes = [v for v in quote['volume'] if v is not None]
+            
+            if closes:
+                current_price = float(closes[-1])
             if len(closes) > 1:
-                prev_close = float(closes.iloc[-2])
-            
+                prev_close = float(closes[-2])
+                
             if len(highs) >= 15:
-                resistance_level = round(float(highs.iloc[-15:-1].max()), 2)
+                resistance_level = round(max(highs[-15:-1]), 2)
             else:
                 resistance_level = round(current_price * 1.03, 2)
                 
             if len(lows) >= 15:
-                support_level = round(float(lows.iloc[-15:-1].min()), 2)
+                support_level = round(min(lows[-15:-1]), 2)
             else:
                 support_level = round(current_price * 0.97, 2)
                 
             if len(volumes) >= 11:
-                avg_vol = volumes.iloc[-11:-1].mean()
-                last_vol = volumes.iloc[-1]
+                avg_vol = sum(volumes[-11:-1]) / 10
+                last_vol = volumes[-1]
                 if avg_vol > 0:
                     vol_multiplier = round(float(last_vol / avg_vol), 2)
-    except Exception as e:
+    except Exception:
         pass
-        
+
     if current_price > resistance_level:
-        if vol_multiplier >= 1.2:
-            breakout_status = "🚀 DİRENÇ NET KIRILDI (Hacimli Yükseliş)"
-            action_advice = "🟢 ALIM YÖNLÜ (Long / Call)"
-        else:
-            breakout_status = "⚠️ Direnç Üstünde Ama Hacim Zayıf"
-            action_advice = "🟡 TEMKİNLİ İZLE"
+        breakout_status = "🚀 DİRENÇ NET KIRILDI" if vol_multiplier >= 1.2 else "⚠️ Direnç Üstünde (Hacim Zayıf)"
+        action_advice = "🟢 ALIM YÖNLÜ (Long)"
     elif current_price < support_level:
-        if vol_multiplier >= 1.2:
-            breakout_status = "🔻 DESTEK NET KIRILDI (Hacimli Düşüş)"
-            action_advice = "🔴 SATIM YÖNLÜ (Short / Put)"
-        else:
-            breakout_status = "⚠️ Destek Altında Ama Hacim Zayıf"
-            action_advice = "🟡 TEMKİNLİ İZLE"
+        breakout_status = "🔻 DESTEK NET KIRILDI" if vol_multiplier >= 1.2 else "⚠️ Destek Altında (Hacim Zayıf)"
+        action_advice = "🔴 SATIM YÖNLÜ (Short)"
     else:
-        breakout_status = "🔒 Kanal İçinde (Kırılım Bekleniyor)"
+        breakout_status = "🔒 Kanal İçinde"
         action_advice = "⚪ BEKLE"
 
     change_pct = round(((current_price - prev_close) / prev_close) * 100, 2)
 
     return {
-        "Hisse": clean_symbol,
+        "Hisse": ticker,
         "Son Fiyat ($)": round(current_price, 2),
         "Günlük Değişim %": change_pct,
         "Kritik Direnç": resistance_level,
@@ -103,41 +89,26 @@ tab_tek, tab_toplu = st.tabs(["🔍 Tek Hisse Kırılım Sorgula", "🚀 Nasdaq 
 
 with tab_tek:
     st.subheader("Özel Hisse Kırılım ve Mum Analizi")
-    search_ticker = st.text_input("Hisse Kodu veya Adı Girin (Örn: AAPL, NVDA, Tesla)", "AAPL")
+    search_ticker = st.text_input("Hisse Kodu (Örn: AAPL, NVDA, TSLA)", "AAPL").strip().upper()
     
     if st.button("🔎 Hisse Kırılımını İncele", type="primary"):
-        with st.spinner("Güncel veriler alınıyor..."):
-            res = analyze_candlestick_breakout(search_ticker)
-            if res:
-                st.success(f"{res['Hisse']} - Mum & Kırılım Raporu")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Son Fiyat ($)", f"${res['Son Fiyat ($)']}", f"%{res['Günlük Değişim %']}")
-                col2.metric("Net Karar", res['Net Karar'])
-                col3.metric("Hacim Durumu", res['Hacim Durumu'])
-                col4.metric("Kırılım Durumu", res['Kırılım Durumu'])
-
-                st.divider()
-                col_a, col_b = st.columns(2)
-                col_a.write(f"📈 **Kritik Direnç Seviyesi:** ${res['Kritik Direnç']}")
-                col_b.write(f"📉 **Kritik Destek Seviyesi:** ${res['Kritik Destek']}")
+        with st.spinner("Veriler yükleniyor..."):
+            res = get_stock_data_safe(search_ticker)
+            st.success(f"{res['Hisse']} - Raporu")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Son Fiyat ($)", f"${res['Son Fiyat ($)']}", f"%{res['Günlük Değişim %']}")
+            col2.metric("Net Karar", res['Net Karar'])
+            col3.metric("Hacim Durumu", res['Hacim Durumu'])
+            col4.metric("Kırılım Durumu", res['Kırılım Durumu'])
 
 with tab_toplu:
-    st.subheader("Nasdaq 100 Otomatik Kırılım ve Mum Tarayıcısı")
+    st.subheader("Nasdaq 100 Otomatik Tarayıcı")
     scan_count = st.slider("Taranacak Hisse Adedi", 5, len(NASDAQ_100_TICKERS), 15)
     
     if st.button("🔍 Mum ve Kırılımları Tara", type="primary"):
         results = []
-        my_bar = st.progress(0)
-        selected_tickers = NASDAQ_100_TICKERS[:scan_count]
-        
-        for i, t in enumerate(selected_tickers):
-            my_bar.progress((i + 1) / len(selected_tickers))
-            res = analyze_candlestick_breakout(t)
-            if res:
-                results.append(res)
-                
-        my_bar.empty()
+        for t in NASDAQ_100_TICKERS[:scan_count]:
+            results.append(get_stock_data_safe(t))
         
         if results:
-            df_res = pd.DataFrame(results)
-            st.dataframe(df_res, use_container_width=True)
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
