@@ -2,21 +2,20 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import datetime
-import requests
 
 st.set_page_config(page_title="Nasdaq 100 Kırılım ve Mum Radarı", layout="wide")
 st.title("📊 Nasdaq 100 Mum & Hacim Kırılım Radarı")
 
 bugun = datetime.date.today()
 if bugun.weekday() >= 5:
-    st.warning("⚠️ PİYASALAR KAPALI. GÖSTERİLEN FİYATLAR EN SON İŞLEM GÜNÜNÜN KAPANIŞ VERİLERİDİR.")
+    st.warning("⚠️ PİYASALAR KAPALI. GÖSTERİLEN FİYATLAR SON İŞLEM GÜNÜNÜN KAPANIŞ VERİLERİDİR.")
 
 NASDAQ_100_TICKERS = [
     "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "COST", "AMD",
     "PEP", "TMUS", "LIN", "CSCO", "NFLX", "AZN", "INTC", "ADBE", "QCOM", "TXN"
 ]
 
-@st.cache_data(ttl=0)
+@st.cache_data(ttl=60)
 def analyze_candlestick_breakout(ticker_symbol):
     raw_input = ticker_symbol.strip().upper()
     
@@ -27,28 +26,26 @@ def analyze_candlestick_breakout(ticker_symbol):
     }
     clean_symbol = ticker_map.get(raw_input, raw_input).replace('.', '-')
     
-    # Varsayılan değerler
-    current_price = 100.0
-    prev_close = 99.0
-    resistance_level = 105.0
-    support_level = 95.0
+    # Varsayılan emniyet fiyatları (Yahoo veri veremezse kullanılır)
+    current_price = 150.0
+    prev_close = 148.5
+    resistance_level = 155.0
+    support_level = 145.0
     vol_multiplier = 1.0
     
     try:
-        # Yahoo Finance engeline takılmamak için tarayıcı kimliği (User-Agent) ekliyoruz
-        session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        
-        ticker = yf.Ticker(clean_symbol, session=session)
-        df = ticker.history(period="1mo", interval="1d")
-        
-        if not df.empty and len(df) >= 2:
-            closes = df['Close'].dropna()
-            highs = df['High'].dropna()
-            lows = df['Low'].dropna()
-            volumes = df['Volume'].dropna()
+        data = yf.download(clean_symbol, period="1mo", interval="1d", progress=False)
+        if not data.empty:
+            # MultiIndex sütun yapılarını düzelt
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+                
+            closes = data['Close'].dropna()
+            highs = data['High'].dropna()
+            lows = data['Low'].dropna()
+            volumes = data['Volume'].dropna()
             
-            if len(closes) > 0:
+            if not closes.empty:
                 current_price = float(closes.iloc[-1])
             if len(closes) > 1:
                 prev_close = float(closes.iloc[-2])
@@ -109,7 +106,7 @@ with tab_tek:
     search_ticker = st.text_input("Hisse Kodu veya Adı Girin (Örn: AAPL, NVDA, Tesla)", "AAPL")
     
     if st.button("🔎 Hisse Kırılımını İncele", type="primary"):
-        with st.spinner("Güncel veriler çekiliyor..."):
+        with st.spinner("Güncel veriler alınıyor..."):
             res = analyze_candlestick_breakout(search_ticker)
             if res:
                 st.success(f"{res['Hisse']} - Mum & Kırılım Raporu")
