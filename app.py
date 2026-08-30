@@ -9,7 +9,6 @@ bugun = datetime.date.today()
 if bugun.weekday() >= 5:
     st.warning("⚠️ PİYASALAR KAPALI. GÖSTERİLEN FİYATLAR EN SON İŞLEM GÜNÜNÜN KAPANIŞ VERİLERİDİR.")
 
-# Canlı piyasa ile birebir uyumlu güncel kapanış veritabanı
 LIVE_MARKET_DATA = {
     "NVDA": {"fiyat": 210.20, "onceki": 206.50, "direnc": 215.00, "destek": 200.00, "hacim": "1.4x"},
     "AAPL": {"fiyat": 319.70, "onceki": 315.20, "direnc": 325.00, "destek": 305.00, "hacim": "1.2x"},
