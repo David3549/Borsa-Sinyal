@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import requests
+import yfinance as yf
 import datetime
 
 st.set_page_config(page_title="Öncü Balina Akışı & Nasdaq 100 Radarı", layout="wide")
@@ -25,67 +25,60 @@ def fetch_live_data(ticker_input):
     }
     clean = ticker_map.get(raw, raw)
     
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean}?range=1mo&interval=1d"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            result = data['chart']['result'][0]
-            quote = result['indicators']['quote'][0]
+        # Doğrudan güvenilir yfinance kütüphanesi ile anlık veri çekme
+        stock = yf.Ticker(clean)
+        hist = stock.history(period="1mo")
+        
+        if not hist.empty and len(hist) >= 2:
+            closes = hist['Close'].tolist()
+            highs = hist['High'].tolist()
+            lows = hist['Low'].tolist()
+            volumes = hist['Volume'].tolist()
             
-            closes = [c for c in quote['close'] if c is not None]
-            highs = [h for h in quote['high'] if h is not None]
-            lows = [l for l in quote['low'] if l is not None]
-            volumes = [v for v in quote['volume'] if v is not None]
+            current_price = float(closes[-1])
+            prev_close = float(closes[-2])
             
-            if closes:
-                current_price = float(closes[-1])
-                prev_close = float(closes[-2]) if len(closes) > 1 else current_price
+            resistance = round(max(highs[-15:-1]), 2) if len(highs) >= 15 else round(current_price * 1.03, 2)
+            support = round(min(lows[-15:-1]), 2) if len(lows) >= 15 else round(current_price * 0.97, 2)
+            
+            last_vol = volumes[-1] if volumes else 0
+            avg_vol = sum(volumes[-11:-1]) / 10 if len(volumes) >= 11 else 1
+            vol_mult = round(last_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+            
+            degisim = round(((current_price - prev_close) / prev_close) * 100, 2)
+            
+            if current_price > resistance:
+                durum = "🚀 DİRENÇ NET KIRILDI (Balina Alımı)"
+                karar = "🟢 ALIM YÖNLÜ (Long / Call)"
+            elif current_price < support:
+                durum = "🔻 DESTEK NET KIRILDI (Balina Satışı)"
+                karar = "🔴 SATIM YÖNLÜ (Short / Put)"
+            else:
+                durum = "🔒 Kanal İçinde (Balina Beklemede)"
+                karar = "⚪ BEKLE"
                 
-                resistance = round(max(highs[-15:-1]), 2) if len(highs) >= 15 else round(current_price * 1.03, 2)
-                support = round(min(lows[-15:-1]), 2) if len(lows) >= 15 else round(current_price * 0.97, 2)
-                
-                last_vol = volumes[-1] if volumes else 0
-                avg_vol = sum(volumes[-11:-1]) / 10 if len(volumes) >= 11 else 1
-                vol_mult = round(last_vol / avg_vol, 2) if avg_vol > 0 else 1.0
-                
-                degisim = round(((current_price - prev_close) / prev_close) * 100, 2)
-                
-                if current_price > resistance:
-                    durum = "🚀 DİRENÇ NET KIRILDI (Balina Alımı)"
-                    karar = "🟢 ALIM YÖNLÜ (Long / Call)"
-                elif current_price < support:
-                    durum = "🔻 DESTEK NET KIRILDI (Balina Satışı)"
-                    karar = "🔴 SATIM YÖNLÜ (Short / Put)"
-                else:
-                    durum = "🔒 Kanal İçinde (Balina Beklemede)"
-                    karar = "⚪ BEKLE"
-                    
-                return {
-                    "Hisse": clean,
-                    "Son Fiyat ($)": round(current_price, 2),
-                    "Günlük Değişim %": degisim,
-                    "Kritik Direnç": resistance,
-                    "Kritik Destek": support,
-                    "Hacim Durumu": f"{vol_mult}x Ort.",
-                    "Kırılım Durumu": durum,
-                    "Net Karar": karar
-                }
+            return {
+                "Hisse": clean,
+                "Son Fiyat ($)": round(current_price, 2),
+                "Günlük Değişim %": degisim,
+                "Kritik Direnç": resistance,
+                "Kritik Destek": support,
+                "Hacim Durumu": f"{vol_mult}x Ort.",
+                "Kırılım Durumu": durum,
+                "Net Karar": karar
+            }
     except Exception:
         pass
         
     return {
         "Hisse": clean,
-        "Son Fiyat ($)": 150.0,
+        "Son Fiyat ($)": 0.0,
         "Günlük Değişim %": 0.0,
-        "Kritik Direnç": 155.0,
-        "Kritik Destek": 145.0,
-        "Hacim Durumu": "1.0x Ort.",
-        "Kırılım Durumu": "Veri Bekleniyor",
+        "Kritik Direnç": 0.0,
+        "Kritik Destek": 0.0,
+        "Hacim Durumu": "0x",
+        "Kırılım Durumu": "Veri Alınamadı",
         "Net Karar": "⚪ BEKLE"
     }
 
