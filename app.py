@@ -9,30 +9,13 @@ bugun = datetime.date.today()
 if bugun.weekday() >= 5:
     st.warning("⚠️ PİYASALAR KAPALI. GÖSTERİLEN FİYATLAR EN SON İŞLEM GÜNÜNÜN KAPANIŞ VERİLERİDİR.")
 
-LIVE_MARKET_DATA = {
-    "NVDA": {"fiyat": 210.20, "onceki": 206.50, "direnc": 215.00, "destek": 200.00, "hacim": "1.4x"},
-    "AAPL": {"fiyat": 319.70, "onceki": 315.20, "direnc": 325.00, "destek": 305.00, "hacim": "1.2x"},
-    "MSFT": {"fiyat": 415.20, "onceki": 408.10, "direnc": 425.00, "destek": 398.00, "hacim": "1.3x"},
-    "AMZN": {"fiyat": 175.40, "onceki": 178.15, "direnc": 184.00, "destek": 168.00, "hacim": "1.0x"},
-    "GOOGL": {"fiyat": 172.80, "onceki": 173.50, "direnc": 180.00, "destek": 165.00, "hacim": "1.1x"},
-    "META": {"fiyat": 510.30, "onceki": 504.00, "direnc": 525.00, "destek": 490.00, "hacim": "1.5x"},
-    "TSLA": {"fiyat": 222.10, "onceki": 216.50, "direnc": 230.00, "destek": 210.00, "hacim": "1.6x"},
-    "AVGO": {"fiyat": 165.50, "onceki": 158.40, "direnc": 172.00, "destek": 152.00, "hacim": "1.4x"},
-    "COST": {"fiyat": 880.00, "onceki": 900.00, "direnc": 915.00, "destek": 850.00, "hacim": "0.9x"},
-    "AMD": {"fiyat": 142.30, "onceki": 143.60, "direnc": 148.00, "destek": 135.00, "hacim": "1.1x"},
-    "PEP": {"fiyat": 168.00, "onceki": 171.00, "direnc": 175.00, "destek": 162.00, "hacim": "0.8x"},
-    "TMUS": {"fiyat": 182.50, "onceki": 184.40, "direnc": 190.00, "destek": 175.00, "hacim": "1.0x"},
-    "LIN": {"fiyat": 460.00, "onceki": 455.00, "direnc": 475.00, "destek": 445.00, "hacim": "1.0x"},
-    "CSCO": {"fiyat": 48.50, "onceki": 48.10, "direnc": 50.00, "destek": 46.00, "hacim": "1.2x"},
-    "NFLX": {"fiyat": 660.00, "onceki": 650.00, "direnc": 685.00, "destek": 630.00, "hacim": "1.3x"},
-    "AZN": {"fiyat": 75.20, "onceki": 74.80, "direnc": 78.00, "destek": 72.00, "hacim": "1.0x"},
-    "INTC": {"fiyat": 22.40, "onceki": 21.90, "direnc": 24.00, "destek": 20.50, "hacim": "1.5x"},
-    "ADBE": {"fiyat": 495.00, "onceki": 488.00, "direnc": 515.00, "destek": 470.00, "hacim": "1.1x"},
-    "QCOM": {"fiyat": 168.30, "onceki": 165.00, "direnc": 175.00, "destek": 160.00, "hacim": "1.2x"},
-    "TXN": {"fiyat": 195.40, "onceki": 193.00, "direnc": 202.00, "destek": 188.00, "hacim": "1.0x"}
-}
+NASDAQ_100_TICKERS = [
+    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "COST", "AMD",
+    "PEP", "TMUS", "LIN", "CSCO", "NFLX", "AZN", "INTC", "ADBE", "QCOM", "TXN"
+]
 
-def analyze_stock(ticker_input):
+@st.cache_data(ttl=60)
+def fetch_stooq_data(ticker_input):
     raw = ticker_input.strip().upper()
     ticker_map = {
         "AAPLE": "AAPL", "APPLE": "AAPL", "MICROSOFT": "MSFT", 
@@ -41,41 +24,58 @@ def analyze_stock(ticker_input):
     }
     clean = ticker_map.get(raw, raw)
     
-    if clean in LIVE_MARKET_DATA:
-        d = LIVE_MARKET_DATA[clean]
-        fiyat = d["fiyat"]
-        onceki = d["onceki"]
-        direnc = d["direnc"]
-        destek = d["destek"]
-        hacim_str = d["hacim"] + " Ort."
-    else:
-        fiyat = 150.0
-        onceki = 148.0
-        direnc = 155.0
-        destek = 145.0
-        hacim_str = "1.0x Ort."
-
-    degisim = round(((fiyat - onceki) / onceki) * 100, 2)
-    
-    if fiyat > direnc:
-        durum = "🚀 DİRENÇ NET KIRILDI (Balina Alımı)"
-        karar = "🟢 ALIM YÖNLÜ (Long / Call)"
-    elif fiyat < destek:
-        durum = "🔻 DESTEK NET KIRILDI (Balina Satışı)"
-        karar = "🔴 SATIM YÖNLÜ (Short / Put)"
-    else:
-        durum = "🔒 Kanal İçinde (Balina Beklemede)"
-        karar = "⚪ BEKLE"
+    try:
+        url = f"https://stooq.com/q/l/?s={clean.lower()}.us&f=sd2t2ohlcv&h&e=csv"
+        df = pd.read_csv(url)
+        
+        if not df.empty and 'Close' in df.columns:
+            close_val = df['Close'].values[0]
+            open_val = df['Open'].values[0]
+            high_val = df['High'].values[0]
+            low_val = df['Low'].values[0]
+            vol_val = df['Volume'].values[0]
+            
+            if pd.notna(close_val) and close_val != "N/D":
+                current_price = float(close_val)
+                prev_close = float(open_val) if pd.notna(open_val) and open_val != "N/D" else current_price
+                
+                direnc = round(float(high_val) * 1.01, 2) if pd.notna(high_val) and high_val != "N/D" else round(current_price * 1.03, 2)
+                destek = round(float(low_val) * 0.99, 2) if pd.notna(low_val) and low_val != "N/D" else round(current_price * 0.97, 2)
+                
+                degisim = round(((current_price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
+                
+                if current_price > direnc:
+                    durum = "🚀 DİRENÇ NET KIRILDI (Balina Alımı)"
+                    karar = "🟢 ALIM YÖNLÜ (Long / Call)"
+                elif current_price < destek:
+                    durum = "🔻 DESTEK NET KIRILDI (Balina Satışı)"
+                    karar = "🔴 SATIM YÖNLÜ (Short / Put)"
+                else:
+                    durum = "🔒 Kanal İçinde (Balina Beklemede)"
+                    karar = "⚪ BEKLE"
+                    
+                return {
+                    "Hisse": clean,
+                    "Son Fiyat ($)": round(current_price, 2),
+                    "Günlük Değişim %": degisim,
+                    "Kritik Direnç": direnc,
+                    "Kritik Destek": destek,
+                    "Hacim Durumu": f"{int(vol_val):,}" if pd.notna(vol_val) else "1.0x",
+                    "Kırılım Durumu": durum,
+                    "Net Karar": karar
+                }
+    except Exception:
+        pass
         
     return {
         "Hisse": clean,
-        "Son Fiyat ($)": fiyat,
-        "Günlük Değişim %": degisim,
-        "Kritik Direnç": direnc,
-        "Kritik Destek": destek,
-        "Hacim Durumu": hacim_str,
-        "Kırılım Durumu": durum,
-        "Net Karar": karar
+        "Son Fiyat ($)": 0.0,
+        "Günlük Değişim %": 0.0,
+        "Kritik Direnç": 0.0,
+        "Kritik Destek": 0.0,
+        "Hacim Durumu": "Veri Yok",
+        "Kırılım Durumu": "Bağlantı Hatası",
+        "Net Karar": "⚪ BEKLE"
     }
 
 tab_tek, tab_toplu = st.tabs(["🔍 Tek Hisse Olta Sorgula", "🚀 Nasdaq 100 Toplu Tarama"])
@@ -85,7 +85,8 @@ with tab_tek:
     search_ticker = st.text_input("Hisse Kodu Girin (Örn: NVDA, TSLA, AAPL)", "NVDA")
     
     if st.button("🔎 Balina Kokusu Al", type="primary"):
-        res = analyze_stock(search_ticker)
+        with st.spinner("Piyasa verileri taranıyor..."):
+            res = fetch_stooq_data(search_ticker)
         st.success(f"{res['Hisse']} - Balina Akış Raporu")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Son Fiyat ($)", f"${res['Son Fiyat ($)']}", f"%{res['Günlük Değişim %']}")
@@ -95,8 +96,9 @@ with tab_tek:
 
 with tab_toplu:
     st.subheader("Nasdaq 100 Toplu Balina Radarı")
-    scan_count = st.slider("Taranacak Hisse Adedi", 5, len(LIVE_MARKET_DATA), 15)
+    scan_count = st.slider("Taranacak Hisse Adedi", 5, len(NASDAQ_100_TICKERS), 15)
     
     if st.button("🔍 Toplu Balina Tara", type="primary"):
-        results = [analyze_stock(t) for t in list(LIVE_MARKET_DATA.keys())[:scan_count]]
+        with st.spinner("Toplu liste taranıyor..."):
+            results = [fetch_stooq_data(t) for t in NASDAQ_100_TICKERS[:scan_count]]
         st.dataframe(pd.DataFrame(results), use_container_width=True)
