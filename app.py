@@ -25,7 +25,6 @@ def fetch_live_data(ticker_input):
     }
     clean = ticker_map.get(raw, raw)
     
-    # Doğrudan Yahoo Finance API endpoint'inden anlık canlı veri çekme
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean}?range=1mo&interval=1d"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -75,10 +74,10 @@ def fetch_live_data(ticker_input):
                     "Hacim Durumu": f"{vol_mult}x Ort.",
                     "Kırılım Durumu": durum,
                     "Net Karar": karar
+                }
     except Exception:
         pass
         
-    # Hata durumunda varsayılan güvenli yapı
     return {
         "Hisse": clean,
         "Son Fiyat ($)": 150.0,
