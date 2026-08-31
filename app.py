@@ -1,104 +1,106 @@
-import streamlit as st
 import pandas as pd
-import datetime
+import streamlit as st
+import yfinance as yf
 
-st.set_page_config(page_title="Öncü Balina Akışı & Nasdaq 100 Radarı", layout="wide")
-st.title("🐋 Öncü Balina Akışı & Nasdaq 100 Radarı")
+st.set_page_config(
+    page_title="Borsa & Opsiyon Sinyal Paneli", page_icon="📈", layout="wide"
+)
 
-bugun = datetime.date.today()
-if bugun.weekday() >= 5:
-    st.warning("⚠️ PİYASALAR KAPALI. GÖSTERİLEN FİYATLAR EN SON İŞLEM GÜNÜNÜN KAPANIŞ VERİLERİDİR.")
+st.title("📈 Canlı Borsa ve Opsiyon Takip Paneli")
+st.markdown("S&P 500 / Nasdaq Devleri & Opsiyon Duygu Analizi")
 
-NASDAQ_100_TICKERS = [
-    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "COST", "AMD",
-    "PEP", "TMUS", "LIN", "CSCO", "NFLX", "AZN", "INTC", "ADBE", "QCOM", "TXN"
+# Ticker listesi
+option_tickers = ["NVDA", "AAPL", "MSFT", "TSLA", "META", "AMZN"]
+stock_tickers = [
+    "NVDA",
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "AVGO",
+    "AMD",
+    "NFLX",
 ]
 
-@st.cache_data(ttl=60)
-def fetch_stooq_data(ticker_input):
-    raw = ticker_input.strip().upper()
-    ticker_map = {
-        "AAPLE": "AAPL", "APPLE": "AAPL", "MICROSOFT": "MSFT", 
-        "TESLA": "TSLA", "AMAZON": "AMZN", "GOOGLE": "GOOGL", "NVIDIA": "NVDA",
-        "META": "META", "AMD": "AMD", "NETFLIX": "NFLX"
-    }
-    clean = ticker_map.get(raw, raw)
-    
-    try:
-        url = f"https://stooq.com/q/l/?s={clean.lower()}.us&f=sd2t2ohlcv&h&e=csv"
-        df = pd.read_csv(url)
-        
-        if not df.empty and 'Close' in df.columns:
-            close_val = df['Close'].values[0]
-            open_val = df['Open'].values[0]
-            high_val = df['High'].values[0]
-            low_val = df['Low'].values[0]
-            vol_val = df['Volume'].values[0]
-            
-            if pd.notna(close_val) and close_val != "N/D":
-                current_price = float(close_val)
-                prev_close = float(open_val) if pd.notna(open_val) and open_val != "N/D" else current_price
-                
-                direnc = round(float(high_val) * 1.01, 2) if pd.notna(high_val) and high_val != "N/D" else round(current_price * 1.03, 2)
-                destek = round(float(low_val) * 0.99, 2) if pd.notna(low_val) and low_val != "N/D" else round(current_price * 0.97, 2)
-                
-                degisim = round(((current_price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
-                
-                if current_price > direnc:
-                    durum = "🚀 DİRENÇ NET KIRILDI (Balina Alımı)"
-                    karar = "🟢 ALIM YÖNLÜ (Long / Call)"
-                elif current_price < destek:
-                    durum = "🔻 DESTEK NET KIRILDI (Balina Satışı)"
-                    karar = "🔴 SATIM YÖNLÜ (Short / Put)"
-                else:
-                    durum = "🔒 Kanal İçinde (Balina Beklemede)"
-                    karar = "⚪ BEKLE"
-                    
-                return {
-                    "Hisse": clean,
-                    "Son Fiyat ($)": round(current_price, 2),
-                    "Günlük Değişim %": degisim,
-                    "Kritik Direnç": direnc,
-                    "Kritik Destek": destek,
-                    "Hacim Durumu": f"{int(vol_val):,}" if pd.notna(vol_val) else "1.0x",
-                    "Kırılım Durumu": durum,
-                    "Net Karar": karar
-                }
-    except Exception:
-        pass
-        
-    return {
-        "Hisse": clean,
-        "Son Fiyat ($)": 0.0,
-        "Günlük Değişim %": 0.0,
-        "Kritik Direnç": 0.0,
-        "Kritik Destek": 0.0,
-        "Hacim Durumu": "Veri Yok",
-        "Kırılım Durumu": "Bağlantı Hatası",
-        "Net Karar": "⚪ BEKLE"
-    }
+# Sekmeler
+tab1, tab2 = st.tabs(
+    ["🚀 Opsiyon Duygu Analizi (P/C)", "📊 Hisse Trend & Sinyaller"]
+)
 
-tab_tek, tab_toplu = st.tabs(["🔍 Tek Hisse Olta Sorgula", "🚀 Nasdaq 100 Toplu Tarama"])
+with tab1:
+  st.subheader("En Yakın Vade Opsiyon P/C Oranları")
+  if st.button("Opsiyon Verilerini Güncelle"):
+    with st.spinner("Opsiyon zincirleri taranıyor..."):
+      opt_results = []
+      for ticker_symbol in option_tickers:
+        try:
+          stock = yf.Ticker(ticker_symbol)
+          exp_dates = stock.options
+          if not exp_dates:
+            continue
+          nearest_date = exp_dates[0]
+          opt_chain = stock.option_chain(nearest_date)
+          calls = opt_chain.calls
+          puts = opt_chain.puts
 
-with tab_tek:
-    st.subheader("Hisse Kodu Arayın")
-    search_ticker = st.text_input("Hisse Kodu Girin (Örn: NVDA, TSLA, AAPL)", "NVDA")
-    
-    if st.button("🔎 Balina Kokusu Al", type="primary"):
-        with st.spinner("Piyasa verileri taranıyor..."):
-            res = fetch_stooq_data(search_ticker)
-        st.success(f"{res['Hisse']} - Balina Akış Raporu")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Son Fiyat ($)", f"${res['Son Fiyat ($)']}", f"%{res['Günlük Değişim %']}")
-        col2.metric("Net Karar", res['Net Karar'])
-        col3.metric("Hacim Durumu", res['Hacim Durumu'])
-        col4.metric("Kırılım Durumu", res['Kırılım Durumu'])
+          total_call_vol = calls["volume"].fillna(0).sum()
+          total_put_vol = puts["volume"].fillna(0).sum()
+          pc_ratio = (
+              round(total_put_vol / total_call_vol, 2)
+              if total_call_vol > 0
+              else 0
+          )
+          current_price = stock.history(period="1d")["Close"].iloc[-1]
 
-with tab_toplu:
-    st.subheader("Nasdaq 100 Toplu Balina Radarı")
-    scan_count = st.slider("Taranacak Hisse Adedi", 5, len(NASDAQ_100_TICKERS), 15)
-    
-    if st.button("🔍 Toplu Balina Tara", type="primary"):
-        with st.spinner("Toplu liste taranıyor..."):
-            results = [fetch_stooq_data(t) for t in NASDAQ_100_TICKERS[:scan_count]]
-        st.dataframe(pd.DataFrame(results), use_container_width=True)
+          opt_results.append({
+              "Hisse": ticker_symbol,
+              "Fiyat ($)": round(current_price, 2),
+              "İlk Vade": nearest_date,
+              "Call Hacim": int(total_call_vol),
+              "Put Hacim": int(total_put_vol),
+              "P/C Oranı": pc_ratio,
+          })
+        except Exception as e:
+          st.error(f"{ticker_symbol} Hata: {e}")
+
+      df_options = pd.DataFrame(opt_results)
+      st.dataframe(df_options, use_container_width=True)
+
+with tab2:
+  st.subheader("Teknik Sinyaller (SMA 20 / 50)")
+  if st.button("Hisseleri Tara"):
+    with st.spinner("Hisse verileri indiriliyor..."):
+      results = []
+      for ticker in stock_tickers:
+        try:
+          data = yf.download(ticker, period="3mo", interval="1d", progress=False)
+          if data.empty:
+            continue
+          if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+
+          close = data["Close"]
+          sma20 = close.rolling(window=20).mean()
+          sma50 = close.rolling(window=50).mean()
+
+          current_price = float(close.iloc[-1])
+          curr_sma20 = float(sma20.iloc[-1])
+          curr_sma50 = float(sma50.iloc[-1])
+          trend = (
+              "Yükseliş (AL)" if current_price > curr_sma20 else "Düşüş / Yatay"
+          )
+
+          results.append({
+              "Hisse": ticker,
+              "Fiyat ($)": round(current_price, 2),
+              "SMA 20": round(curr_sma20, 2),
+              "SMA 50": round(curr_sma50, 2),
+              "Durum": trend,
+          })
+        except Exception as e:
+          pass
+
+      df_results = pd.DataFrame(results)
+      st.dataframe(df_results, use_container_width=True)
