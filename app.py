@@ -1,13 +1,14 @@
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from datetime import datetime
 
 st.set_page_config(
     page_title="Borsa & Opsiyon Sinyal Paneli", page_icon="📈", layout="wide"
 )
 
 st.title("📈 Canlı Borsa ve Opsiyon Takip Paneli")
-st.markdown("S&P 500 / Nasdaq Devleri & Opsiyon Duygu Analizi")
+st.markdown("S&P 500 / Nasdaq Devleri & Ultra Kısa Vade (0DTE/1-3 Gün) Opsiyon Analizi")
 
 # Ticker listesi
 option_tickers = ["NVDA", "AAPL", "MSFT", "TSLA", "META", "AMZN"]
@@ -26,41 +27,57 @@ stock_tickers = [
 
 # Sekmeler
 tab1, tab2 = st.tabs(
-    ["🚀 Opsiyon Duygu Analizi (P/C)", "📊 Hisse Trend & Sinyaller"]
+    ["🎯 0DTE & Kısa Vade Opsiyon Duygu Analizi", "📊 Hisse Trend & Sinyaller"]
 )
 
 with tab1:
-  st.subheader("En Yakın Vade Opsiyon P/C Oranları")
+  st.subheader("En Yakın Vade (0DTE / Yakın Tarih) Opsiyon Dağılımı ve Sinyal")
   if st.button("Opsiyon Verilerini Güncelle"):
-    with st.spinner("Opsiyon zincirleri taranıyor..."):
+    with st.spinner("0DTE ve yakın vade opsiyon zincirleri taranıyor..."):
       opt_results = []
+      bugun = datetime.now().date()
+
       for ticker_symbol in option_tickers:
         try:
           stock = yf.Ticker(ticker_symbol)
           exp_dates = stock.options
           if not exp_dates:
             continue
+
+          # En yakın vadeyi al
           nearest_date = exp_dates[0]
+
           opt_chain = stock.option_chain(nearest_date)
           calls = opt_chain.calls
           puts = opt_chain.puts
 
           total_call_vol = calls["volume"].fillna(0).sum()
           total_put_vol = puts["volume"].fillna(0).sum()
+
           pc_ratio = (
               round(total_put_vol / total_call_vol, 2)
               if total_call_vol > 0
               else 0
           )
+
+          # Kısa vade / 0DTE Yön Stratejisi
+          if total_call_vol > total_put_vol:
+            sinyal = "🟢 CALL AĞIRLIKLI (Yükseliş Beklentisi)"
+          elif total_put_vol > total_call_vol:
+            sinyal = "🔴 PUT AĞIRLIKLI (Düşüş/Koruma)"
+          else:
+            sinyal = "⚪ NÖTR / DENGELİ"
+
           current_price = stock.history(period="1d")["Close"].iloc[-1]
 
           opt_results.append({
               "Hisse": ticker_symbol,
               "Fiyat ($)": round(current_price, 2),
-              "İlk Vade": nearest_date,
+              "Vade": nearest_date,
               "Call Hacim": int(total_call_vol),
               "Put Hacim": int(total_put_vol),
               "P/C Oranı": pc_ratio,
+              "0DTE/Kısa Vade Yönü": sinyal,
           })
         except Exception as e:
           st.error(f"{ticker_symbol} Hata: {e}")
@@ -73,34 +90,31 @@ with tab2:
   if st.button("Hisseleri Tara"):
     with st.spinner("Hisse verileri indiriliyor..."):
       results = []
-      for ticker in stock_tickers:
+      for ticker_symbol in stock_tickers:
         try:
-          data = yf.download(ticker, period="3mo", interval="1d", progress=False)
-          if data.empty:
+          stock = yf.Ticker(ticker_symbol)
+          hist = stock.history(period="3mo")
+          if hist.empty:
             continue
-          if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
 
-          close = data["Close"]
-          sma20 = close.rolling(window=20).mean()
-          sma50 = close.rolling(window=50).mean()
+          current_price = hist["Close"].iloc[-1]
+          sma_20 = hist["Close"].rolling(window=20).mean().iloc[-1]
+          sma_50 = hist["Close"].rolling(window=50).mean().iloc[-1]
 
-          current_price = float(close.iloc[-1])
-          curr_sma20 = float(sma20.iloc[-1])
-          curr_sma50 = float(sma50.iloc[-1])
-          trend = (
-              "Yükseliş (AL)" if current_price > curr_sma20 else "Düşüş / Yatay"
-          )
+          if current_price > sma_20:
+            durum = "Yükseliş (AL)"
+          else:
+            durum = "Düşüş / Yatay"
 
           results.append({
-              "Hisse": ticker,
+              "Hisse": ticker_symbol,
               "Fiyat ($)": round(current_price, 2),
-              "SMA 20": round(curr_sma20, 2),
-              "SMA 50": round(curr_sma50, 2),
-              "Durum": trend,
+              "SMA 20": round(sma_20, 2),
+              "SMA 50": round(sma_50, 2),
+              "Durum": durum,
           })
         except Exception as e:
-          pass
+          st.error(f"{ticker_symbol} Hata: {e}")
 
-      df_results = pd.DataFrame(results)
-      st.dataframe(df_results, use_container_width=True)
+      df_signals = pd.DataFrame(results)
+      st.dataframe(df_signals, use_container_width=True)
