@@ -33,9 +33,8 @@ tab1, tab2 = st.tabs(
 with tab1:
   st.subheader("En Yakın Vade (0DTE / Yakın Tarih) Opsiyon Dağılımı ve Sinyal")
   if st.button("Opsiyon Verilerini Güncelle"):
-    with st.spinner("0DTE ve yakın vade opsiyon zincirleri taranıyor..."):
+    with st.spinner("Opsiyon zincirleri taranıyor..."):
       opt_results = []
-      bugun = datetime.now().date()
 
       for ticker_symbol in option_tickers:
         try:
@@ -44,12 +43,27 @@ with tab1:
           if not exp_dates:
             continue
 
-          # En yakın vadeyi al
-          nearest_date = exp_dates[0]
+          # Hacmi olan en yakın geçerli vadeyi bulmak için döngü
+          valid_chain = None
+          chosen_date = None
 
-          opt_chain = stock.option_chain(nearest_date)
-          calls = opt_chain.calls
-          puts = opt_chain.puts
+          for d in exp_dates[:3]:  # İlk 3 vadeyi kontrol et
+            opt_chain = stock.option_chain(d)
+            if (
+                not opt_chain.calls.empty
+                and opt_chain.calls["volume"].sum() > 0
+            ):
+              valid_chain = opt_chain
+              chosen_date = d
+              break
+
+          # Eğer ilk vadelerde hacim yoksa ilk tarihi direkt baz al
+          if valid_chain is None:
+            chosen_date = exp_dates[0]
+            valid_chain = stock.option_chain(chosen_date)
+
+          calls = valid_chain.calls
+          puts = valid_chain.puts
 
           total_call_vol = calls["volume"].fillna(0).sum()
           total_put_vol = puts["volume"].fillna(0).sum()
@@ -60,7 +74,7 @@ with tab1:
               else 0
           )
 
-          # Kısa vade / 0DTE Yön Stratejisi
+          # Kısa vade / Yön Stratejisi
           if total_call_vol > total_put_vol:
             sinyal = "🟢 CALL AĞIRLIKLI (Yükseliş Beklentisi)"
           elif total_put_vol > total_call_vol:
@@ -68,12 +82,17 @@ with tab1:
           else:
             sinyal = "⚪ NÖTR / DENGELİ"
 
-          current_price = stock.history(period="1d")["Close"].iloc[-1]
+          # Güncel fiyatı güvenli çekme
+          hist_data = stock.history(period="5d")
+          if not hist_data.empty:
+            current_price = hist_data["Close"].iloc[-1]
+          else:
+            current_price = 0.0
 
           opt_results.append({
               "Hisse": ticker_symbol,
               "Fiyat ($)": round(current_price, 2),
-              "Vade": nearest_date,
+              "Vade": chosen_date,
               "Call Hacim": int(total_call_vol),
               "Put Hacim": int(total_put_vol),
               "P/C Oranı": pc_ratio,
@@ -82,8 +101,14 @@ with tab1:
         except Exception as e:
           st.error(f"{ticker_symbol} Hata: {e}")
 
-      df_options = pd.DataFrame(opt_results)
-      st.dataframe(df_options, use_container_width=True)
+      if opt_results:
+        df_options = pd.DataFrame(opt_results)
+        st.dataframe(df_options, use_container_width=True)
+      else:
+        st.warning(
+            "Şu an gösterilecek opsiyon verisi bulunamadı. Lütfen piyasa"
+            " saatlerinde tekrar deneyin."
+        )
 
 with tab2:
   st.subheader("Teknik Sinyaller (SMA 20 / 50)")
